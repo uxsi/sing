@@ -168,3 +168,100 @@ body { background: var(--bg); color: var(--text); }
   flex: 1;
   white-space: pre-wrap;
 }
+
+.field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.input {
+  flex: 1;
+  min-width: 160px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.textarea {
+  width: 100%;
+  margin-top: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.8rem;
+  resize: vertical;
+}
+
+.ghost.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.status-line {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.status-line.warn { color: var(--warn); }
+
+.preview {
+  margin: 8px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 0.75rem;
+  color: #c9d4e3;
+  white-space: pre-wrap;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.card-head h2 { margin: 0; }
+
+.list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+.list-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 0.88rem;
+}
+
+.error-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 0.85rem;
+  color: var(--danger);
+  line-height: 1.5;
+}
+.error-list code { color: #ffb4b8; }
+
+.pill.ok { color: var(--ok); border-color: #1f5a40; }
+.pill.bad { color: var(--danger); border-color: #6a3034; }
