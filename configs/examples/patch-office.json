@@ -1,0 +1,24 @@
+{
+  "mode": "office",
+  "description": "Office mode: GitHub/ssh/git direct before geosite-github proxy; strict_route false; final bias direct",
+  "route_rules_prepend": [
+    {
+      "domain_suffix": [
+        "github.com",
+        "githubusercontent.com"
+      ],
+      "outbound": "direct"
+    },
+    {
+      "process_name": [
+        "ssh",
+        "git"
+      ],
+      "outbound": "direct"
+    }
+  ],
+  "tun": {
+    "strict_route": false
+  },
+  "final_selector_default": "direct"
+}

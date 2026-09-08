@@ -1,0 +1,15 @@
+{
+  "mode": "abroad",
+  "description": "Abroad mode: prefer clean DNS and exclusive TUN; strict_route true; do not force GitHub direct",
+  "notes": [
+    "Prefer clean DNS (DoH/DoT via proxy detour).",
+    "Prefer strict_route true on TUN when company tunnel is absent.",
+    "Warn if dual TUN is detected before connect."
+  ],
+  "tun": {
+    "strict_route": true
+  },
+  "meta": {
+    "warn_dual_tun": true
+  }
+}

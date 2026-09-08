@@ -50,7 +50,7 @@
 
 | 阶段 | 平台 | 说明 |
 |------|------|------|
-| MVP | macOS（优先，贴合现网 iOA+SFM 场景） | 先打通 TUN + 模式引擎 + 面板 |
+| MVP | macOS（优先，贴合现网「公司隧道 + SFM」场景） | 先打通 TUN + 模式引擎 + 面板 |
 | MVP+ | Windows | 同一 UI，PlatformVpn 换实现 |
 | 后期 | Linux desktop | 可选 |
 | 后置 | iOS / Android | 权限与上架成本高，不挡桌面主线 |

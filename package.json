@@ -1,0 +1,21 @@
+{
+  "name": "sing",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/controller",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "test": "npm run test -w @sing/controller",
+    "dev": "npm run dev -w @sing/desktop",
+    "cli": "npm run cli -w @sing/controller",
+    "build": "npm run build -w @sing/controller && npm run build -w @sing/desktop",
+    "merge": "npm run cli -w @sing/controller -- merge",
+    "health": "npm run cli -w @sing/controller -- health"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

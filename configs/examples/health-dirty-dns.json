@@ -1,0 +1,31 @@
+{
+  "interfaces": [
+    {
+      "name": "utun4",
+      "inet": [
+        "172.19.0.1/30"
+      ]
+    },
+    {
+      "name": "utun2",
+      "inet": [
+        "10.8.0.2/24"
+      ]
+    }
+  ],
+  "dnsAnswers": [
+    {
+      "name": "github.com",
+      "addrs": [
+        "100.12.0.30"
+      ]
+    },
+    {
+      "name": "ssh.github.com",
+      "addrs": [
+        "100.12.0.31"
+      ]
+    }
+  ],
+  "companyTunHints": true
+}
