@@ -8,26 +8,39 @@ Kernel = official sing-box. This repo does not fork the core.
 
 | Mode | Behavior |
 |------|----------|
-| **office** | Coexist with company tunnel. Insert GitHub / ssh / git to direct before geosite-github to proxy; strict_route false; bias final selector toward direct. |
+| **office** | Coexist with company tunnel / 内网. Insert GitHub / ssh / git to direct before geosite-github to proxy; strict_route false; bias final selector toward direct. |
 | **abroad** | Prefer clean DNS / exclusive TUN. Do not force GitHub direct; set strict_route true when TUN exists; warn about dual TUN. |
-| **manual** | No patch — run baseline JSON as-is. |
+| **manual** | No patch - run baseline JSON as-is. |
 
 ## Layout
 
-apps/desktop — Vite + React panel
-packages/controller — Mode patches, health probe, CLI, merge
-configs/examples — Baseline + mode patches + health fixtures
-docs/ — Product and architecture docs
+apps/desktop - Vite + React panel
+packages/controller - Mode patches, health probe, subscribe, validate, clash_api, CLI, merge
+configs/examples - Baseline + mode patches + health fixtures
+docs/ - Product and architecture docs
 
 ## Quick start
 
-cd /workspace/sing
 npm install
 npm test
-npm run build
-npm run dev
-npm run cli -- merge --mode office --baseline configs/examples/baseline.json
-npm run cli -- health --fixture configs/examples/health-dirty-dns.json
+
+then build and start the desktop with the root scripts
+
+## CLI
+
+Use the workspace cli script with a command name.
+
+Phase 1: merge, health, detect-core
+Phase 2: subscribe, validate, proxies, connections, delay
+
+Examples (prefix with workspace cli runner):
+  merge --mode office --baseline configs/examples/baseline.json
+  health --fixture configs/examples/health-dirty-dns.json
+  subscribe --url URL --out PATH
+  validate --file configs/examples/baseline.json
+  proxies
+  connections
+  delay --name PROXY
 
 ## Docs
 

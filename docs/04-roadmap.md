@@ -1,19 +1,22 @@
 # 分期路线与验收
 
-## Phase 0 — 方案与仓库（当前）
+## Phase 0 — 方案与仓库
 
 - [x] 方案落入 `docs/`
-- [ ] 初始化应用仓库结构与许可证/版本钉扎（sing-box 版本号）
-- [ ] 示例配置 + 办公/出国补丁样例 JSON
+- [x] 初始化应用仓库结构（monorepo：`apps/desktop`、`packages/controller`、`configs/examples`）
+- [ ] 许可证/版本钉扎（sing-box 版本号）— 仍待补充
+- [x] 示例配置 + 办公/出国补丁样例 JSON（`configs/examples/`）
 
 **验收**：文档评审通过；目录可开工。
 
 ## Phase 1 — macOS 桌面 MVP
 
-- 导入配置、启停 core、Rule/Global/Direct、节点选择、日志、mixed 端口
-- TUN 连通（权限引导）
-- ModeEngine：办公 / 出国 / 手动
-- HealthProbe：双 TUN、脏 DNS 告警 + 办公保护补丁
+- [x] ModeEngine：办公 / 出国 / 手动（`packages/controller` patch + merge + CLI）
+- [x] HealthProbe：双 TUN、脏 DNS 告警分类（fixture + CLI）
+- [x] 桌面 SFM-like 壳：模式切换、状态、日志 stub（`apps/desktop`）
+- [ ] 导入配置、启停 core、Rule/Global/Direct、节点选择（真实进程）
+- [ ] TUN 连通（权限引导）
+- [ ] mixed 端口实机联动
 
 **验收**：
 
@@ -21,11 +24,13 @@
 2. 有公司隧道 + 办公模式：`git ls-remote` / `git push`（SSH `ssh.github.com:443`）连续成功；内网 OA 可用；指定代理域名出国。
 3. 强制经本地 SOCKS 用**污染 IP**访问 GitHub 应仍失败（说明问题在路径），但 UI 已引导用户走直连保护或出国模式干净 DNS——行为与文档一致。
 
-## Phase 2 — 体验与订阅
+## Phase 2 — 体验与订阅（进行中）
 
-- URL 订阅更新、配置校验与错误定位
-- 延迟测试、流量/连接列表（clash_api connections）
-- Windows 适配启动
+- [x] URL 订阅更新（`subscribe`：fetch + 落盘 + CLI；桌面 Fetch 预览）
+- [x] 配置校验与错误定位（`validate`：结构检查 + CLI + UI）
+- [x] 延迟测试、连接列表（`clashApi`：proxies / connections / delay + CLI + UI）
+- [ ] Windows 适配启动
+- [ ] 桌面 ↔ core 实机联调（浏览器直连 `127.0.0.1:9090` 受 CORS/可用性限制，需本地桥或 Tauri）
 
 **验收**：Windows 上 Rule + 节点切换可用；订阅可更新。
 
