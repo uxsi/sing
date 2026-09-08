@@ -3,15 +3,28 @@ export { applyModePatch, revertToBaseline, findInsertIndex } from "./patch.js";
 export {
   classifyHealth,
   ipInCidr,
+  loadHealthRules,
+  defaultHealthRules,
   DEFAULT_DIRTY_CIDRS,
   DEFAULT_GITHUB_HINTS,
+  DEFAULT_COMPANY_TUN_PATTERNS,
 } from "./health.js";
 export {
   loadJsonConfig,
   mergeBaselineWithMode,
   mergeFromFiles,
 } from "./merge.js";
-export { detectSingBoxBinary, spawnSingBox } from "./core.js";
+export {
+  detectSingBoxBinary,
+  spawnSingBox,
+  CoreSupervisor,
+  getDefaultSupervisor,
+  resetDefaultSupervisor,
+  type CoreStatus,
+  type CoreRunState,
+  type SupervisorOptions,
+  type SpawnCoreOptions,
+} from "./core.js";
 export {
   fetchSubscription,
   fetchSubscriptionBody,

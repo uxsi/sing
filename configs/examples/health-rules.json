@@ -1,0 +1,5 @@
+{
+  "dirtyCidrs": ["100.12.0.0/16", "10.99.0.0/16"],
+  "githubNameHints": ["github.com", "githubusercontent.com", "ssh.github.com"],
+  "companyTunNamePatterns": ["corp-tun", "company-tun", "内网"]
+}
