@@ -89,8 +89,18 @@ export interface HealthResult {
   warnings: HealthWarning[];
 }
 
+/** Runtime options for classifyHealth (partial overrides). */
 export interface DirtyDnsOptions {
   /** CIDR list treated as dirty for GitHub/SSH answers. Default: 100.12.0.0/16 */
   dirtyCidrs?: string[];
   githubNameHints?: string[];
+  /** Substring patterns (case-insensitive) matching 公司隧道 / 内网 TUN iface names. */
+  companyTunNamePatterns?: string[];
+}
+
+/** Fully resolved health probe rules (defaults + optional JSON file). */
+export interface HealthRules {
+  dirtyCidrs: string[];
+  githubNameHints: string[];
+  companyTunNamePatterns: string[];
 }
