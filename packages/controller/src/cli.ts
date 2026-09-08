@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { classifyHealth } from "./health.js";
+import { classifyHealth, loadHealthRules } from "./health.js";
 import { loadJsonConfig, mergeFromFiles } from "./merge.js";
-import { detectSingBoxBinary } from "./core.js";
+import {
+  detectSingBoxBinary,
+  getDefaultSupervisor,
+} from "./core.js";
 import { fetchSubscription } from "./subscribe.js";
 import { validateConfigText } from "./validate.js";
 import {
@@ -19,8 +22,9 @@ function printHelp(): void {
 
 Usage:
   singctl merge --mode <office|abroad|manual> --baseline <path> [--out <path>]
-  singctl health --fixture <path>
+  singctl health --fixture <path> [--rules <path>]
   singctl detect-core
+  singctl core status|start --config <path>|stop
   singctl subscribe --url <url> --out <path> [--ua <user-agent>] [--timeout <ms>]
   singctl validate --file <path>
   singctl proxies [--base <url>]
@@ -30,6 +34,10 @@ Usage:
 Examples:
   singctl merge --mode office --baseline configs/examples/baseline.json
   singctl health --fixture configs/examples/health-dirty-dns.json
+  singctl health --fixture configs/examples/health-clean.json --rules configs/examples/health-rules.json
+  singctl core status
+  singctl core start --config configs/examples/baseline.json
+  singctl core stop
   singctl subscribe --url https://example.com/sub --out /tmp/sub.json
   singctl validate --file configs/examples/baseline.json
   singctl proxies
@@ -85,8 +93,10 @@ async function main(argv: string[]): Promise<void> {
   if (cmd === "health") {
     const fixture = argValue(args, "--fixture");
     if (!fixture) throw new Error("--fixture <path> is required");
+    const rulesPath = argValue(args, "--rules");
+    const rules = loadHealthRules(rulesPath ? resolve(rulesPath) : null);
     const input = loadJsonConfig(resolve(fixture)) as HealthInput;
-    const result = classifyHealth(input);
+    const result = classifyHealth(input, rules);
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result.ok ? 0 : 2;
     return;
@@ -96,6 +106,34 @@ async function main(argv: string[]): Promise<void> {
     const bin = detectSingBoxBinary();
     console.log(JSON.stringify({ binary: bin }, null, 2));
     return;
+  }
+
+  if (cmd === "core") {
+    const sub = args[1];
+    const supervisor = getDefaultSupervisor();
+    if (sub === "status") {
+      console.log(JSON.stringify(supervisor.status(), null, 2));
+      return;
+    }
+    if (sub === "start") {
+      const config = argValue(args, "--config");
+      if (!config) throw new Error("core start requires --config <path>");
+      const result = supervisor.start(resolve(config));
+      console.log(JSON.stringify({ ...result, status: supervisor.status() }, null, 2));
+      if (result.softFail) {
+        process.exitCode = 0; // soft-fail: binary missing is non-fatal
+      } else {
+        process.exitCode = result.ok ? 0 : 1;
+      }
+      return;
+    }
+    if (sub === "stop") {
+      const result = supervisor.stop();
+      console.log(JSON.stringify({ ...result, status: supervisor.status() }, null, 2));
+      process.exitCode = result.ok ? 0 : 1;
+      return;
+    }
+    throw new Error("core usage: status | start --config <path> | stop");
   }
 
   if (cmd === "subscribe") {
