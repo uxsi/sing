@@ -115,6 +115,10 @@ export function applyModePatch(
         config.dns.final = "dns-local";
       }
     }
+    config.experimental = {
+      ...(config.experimental ?? {}),
+      cache_file: { enabled: false },
+    };
 
     return {
       config,
