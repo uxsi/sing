@@ -5,19 +5,14 @@
   "dns": {
     "servers": [
       {
+        "type": "https",
         "tag": "dns-remote",
-        "address": "https://1.1.1.1/dns-query",
+        "server": "1.1.1.1",
         "detour": "proxy"
       },
       {
-        "tag": "dns-local",
-        "address": "local"
-      }
-    ],
-    "rules": [
-      {
-        "outbound": "any",
-        "server": "dns-local"
+        "type": "local",
+        "tag": "dns-local"
       }
     ],
     "final": "dns-remote",
@@ -27,11 +22,12 @@
     {
       "type": "tun",
       "tag": "tun-in",
-      "inet4_address": "172.19.0.1/30",
       "auto_route": true,
       "strict_route": true,
       "stack": "system",
-      "sniff": true
+      "address": [
+        "172.19.0.1/30"
+      ]
     },
     {
       "type": "mixed",
@@ -68,24 +64,13 @@
     {
       "type": "direct",
       "tag": "direct"
-    },
-    {
-      "type": "block",
-      "tag": "block"
-    },
-    {
-      "type": "dns",
-      "tag": "dns-out"
     }
   ],
   "route": {
     "auto_detect_interface": true,
     "final": "final",
+    "default_domain_resolver": "dns-local",
     "rules": [
-      {
-        "protocol": "dns",
-        "outbound": "dns-out"
-      },
       {
         "inbound": "tun-in",
         "action": "sniff"
@@ -95,16 +80,28 @@
         "action": "hijack-dns"
       },
       {
-        "geosite": [
-          "github"
-        ],
+        "rule_set": "geosite-github",
         "outbound": "proxy"
       },
       {
-        "geosite": [
-          "cn"
-        ],
+        "rule_set": "geosite-cn",
         "outbound": "direct"
+      }
+    ],
+    "rule_set": [
+      {
+        "tag": "geosite-github",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-github.srs",
+        "download_detour": "proxy"
+      },
+      {
+        "tag": "geosite-cn",
+        "type": "remote",
+        "format": "binary",
+        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
+        "download_detour": "proxy"
       }
     ]
   },
@@ -112,6 +109,9 @@
     "clash_api": {
       "external_controller": "127.0.0.1:9090",
       "secret": ""
+    },
+    "cache_file": {
+      "enabled": true
     }
   }
 }
