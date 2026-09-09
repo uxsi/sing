@@ -5,15 +5,19 @@
   "type": "module",
   "workspaces": [
     "packages/controller",
+    "packages/bridge",
     "apps/desktop"
   ],
   "scripts": {
-    "test": "npm run test -w @sing/controller",
+    "test": "npm run test -w @sing/controller && npm run test -w @sing/bridge",
     "dev": "npm run dev -w @sing/desktop",
     "cli": "npm run cli -w @sing/controller",
     "build": "npm run build -w @sing/controller && npm run build -w @sing/desktop",
     "merge": "npm run cli -w @sing/controller -- merge",
-    "health": "npm run cli -w @sing/controller -- health"
+    "health": "npm run cli -w @sing/controller -- health",
+    "bridge": "npm run start -w @sing/bridge",
+    "desktop:dev": "npm run dev -w @sing/desktop",
+    "tauri:dev": "npm run tauri:dev -w @sing/desktop"
   },
   "engines": {
     "node": ">=18"
