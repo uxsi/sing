@@ -236,6 +236,13 @@ fn clash_get(path: &str, base: Option<String>) -> Result<Value, String> {
 }
 
 
+
+fn runtime_dir() -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join("sing-desktop");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
 fn stderr_tail(child: &mut Child) -> String {
     let mut err_tail = String::new();
     if let Some(mut stderr) = child.stderr.take() {
@@ -295,8 +302,13 @@ enum SpawnOutcome {
 }
 
 fn spawn_and_probe(binary: &str, config: &str) -> SpawnOutcome {
+    let cwd = match runtime_dir() {
+        Ok(p) => p,
+        Err(err) => return SpawnOutcome::SpawnErr(err),
+    };
     match Command::new(binary)
         .args(["run", "-c", config])
+        .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
