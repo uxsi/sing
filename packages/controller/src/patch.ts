@@ -48,6 +48,10 @@ function officeProtectRules(): RouteRule[] {
       outbound: "direct",
     },
     {
+      domain_suffix: ["woa.com", "oa.com"],
+      outbound: "direct",
+    },
+    {
       process_name: ["ssh", "git"],
       outbound: "direct",
     },
