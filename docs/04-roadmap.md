@@ -4,7 +4,7 @@
 
 - [x] 方案落入 `docs/`
 - [x] 初始化应用仓库结构（monorepo：`apps/desktop`、`packages/controller`、`configs/examples`）
-- [ ] 许可证/版本钉扎（sing-box 版本号）— 仍待补充
+- [x] 许可证/版本钉扎（sing-box 版本号）— `third_party/sing-box/VERSION` + `scripts/fetch-sing-box.sh`
 - [x] 示例配置 + 办公/出国补丁样例 JSON（`configs/examples/`）
 
 **验收**：文档评审通过；目录可开工。

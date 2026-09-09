@@ -17,7 +17,8 @@
     "health": "npm run cli -w @sing/controller -- health",
     "bridge": "npm run start -w @sing/bridge",
     "desktop:dev": "npm run dev -w @sing/desktop",
-    "tauri:dev": "npm run tauri:dev -w @sing/desktop"
+    "tauri:dev": "npm run tauri:dev -w @sing/desktop",
+    "fetch:sing-box": "bash ./scripts/fetch-sing-box.sh --host"
   },
   "engines": {
     "node": ">=18"

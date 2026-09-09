@@ -34,6 +34,9 @@
     ],
     "macOS": {
       "minimumSystemVersion": "10.15"
-    }
+    },
+    "externalBin": [
+      "binaries/sing-box"
+    ]
   }
 }
