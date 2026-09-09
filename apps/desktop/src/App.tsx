@@ -430,6 +430,12 @@ export function App() {
                 </strong>
               </li>
               <li>
+                Dataplane:{" "}
+                <strong>
+                  {(coreInfo as { dataplane?: string } | null)?.dataplane ?? "—"}
+                </strong>
+              </li>
+              <li>
                 Mixed: <strong>127.0.0.1:1080</strong>
               </li>
               <li>

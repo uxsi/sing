@@ -18,6 +18,8 @@ struct CoreStatus {
     pid: Option<u32>,
     last_error: Option<String>,
     soft_fail: bool,
+    /// "mixed-only" | "tun" | None when stopped/unknown
+    dataplane: Option<String>,
 }
 
 struct CoreState {
@@ -27,6 +29,7 @@ struct CoreState {
     last_error: Option<String>,
     soft_fail: bool,
     state: String,
+    dataplane: Option<String>,
 }
 
 impl CoreState {
@@ -38,6 +41,7 @@ impl CoreState {
             last_error: None,
             soft_fail: false,
             state: "stopped".into(),
+            dataplane: None,
         }
     }
 
@@ -64,6 +68,7 @@ impl CoreState {
             pid: self.child.as_ref().and_then(|c| Some(c.id())),
             last_error: self.last_error.clone(),
             soft_fail: self.soft_fail,
+            dataplane: self.dataplane.clone(),
         }
     }
 }
@@ -436,6 +441,16 @@ fn write_config_without_tun(src: &Path) -> Result<PathBuf, String> {
     Ok(out)
 }
 
+
+fn prefer_mixed_only_dataplane() -> bool {
+    // Desktop macOS: no Network Extension yet — start mixed-only and rely on System Proxy.
+    // Set SING_TRY_TUN=1 to attempt TUN first (then existing permission fallback).
+    if std::env::var("SING_TRY_TUN").ok().as_deref() == Some("1") {
+        return false;
+    }
+    cfg!(target_os = "macos")
+}
+
 enum SpawnOutcome {
     Running(Child),
     Exited { status: String, stderr: String },
@@ -529,8 +544,28 @@ fn core_start(config_path: String, mode: Option<String>) -> Value {
             });
         }
     };
-    let resolved_str = patched.to_string_lossy().into_owned();
+    let mut resolved_str = patched.to_string_lossy().into_owned();
+    let mut dataplane = "tun".to_string();
+    if prefer_mixed_only_dataplane() {
+        match write_config_without_tun(Path::new(&resolved_str)) {
+            Ok(fallback) => {
+                resolved_str = fallback.to_string_lossy().into_owned();
+                dataplane = "mixed-only".into();
+            }
+            Err(err) => {
+                state.state = "crashed".into();
+                state.config_path = Some(resolved_str);
+                state.last_error = Some(format!("mixed-only strip failed: {err}"));
+                return json!({
+                    "ok": false,
+                    "error": format!("mixed-only strip failed: {err}"),
+                    "status": state.status()
+                });
+            }
+        }
+    }
     state.config_path = Some(resolved_str.clone());
+    state.dataplane = Some(dataplane.clone());
 
     let Some(binary) = detect_sing_box() else {
         state.state = "missing_binary".into();
@@ -552,11 +587,22 @@ fn core_start(config_path: String, mode: Option<String>) -> Value {
             state.child = Some(child);
             state.state = "running".into();
             let status = state.status();
+            let dp = status.dataplane.clone();
             drop(state);
             if mode_name.eq_ignore_ascii_case("office") {
                 force_office_selector_direct();
             }
-            return json!({ "ok": true, "status": status });
+            let mut out = json!({ "ok": true, "status": status });
+            if let Some(dp) = dp {
+                out.as_object_mut().unwrap().insert("dataplane".into(), json!(dp));
+                if dp == "mixed-only" {
+                    out.as_object_mut().unwrap().insert(
+                        "warning".into(),
+                        json!("dataplane=mixed-only (no TUN on macOS desktop yet) — use System Proxy for app traffic"),
+                    );
+                }
+            }
+            return out;
         }
         SpawnOutcome::SpawnErr(message) => {
             state.state = "crashed".into();
@@ -585,6 +631,7 @@ fn core_start(config_path: String, mode: Option<String>) -> Value {
                                 state.last_error = Some(
                                     "TUN not permitted; started mixed-only fallback (no utun)".into(),
                                 );
+                                state.dataplane = Some("mixed-only".into());
                                 let status = state.status();
                                 drop(state);
                                 if mode_name.eq_ignore_ascii_case("office") {
@@ -593,7 +640,8 @@ fn core_start(config_path: String, mode: Option<String>) -> Value {
                                 return json!({
                                     "ok": true,
                                     "fallback": "mixed-only",
-                                    "warning": "TUN not permitted; started mixed-only fallback",
+                                    "dataplane": "mixed-only",
+                                    "warning": "TUN not permitted; started mixed-only fallback — enable System Proxy for app traffic",
                                     "status": status
                                 });
                             }
@@ -637,6 +685,7 @@ fn core_stop() -> Value {
     }
     state.state = "stopped".into();
     state.soft_fail = false;
+    state.dataplane = None;
     // Drop system proxy when core stops so the machine is not left pointing at a dead :1080.
     drop(state);
     let proxy_clear = system_proxy_set(false);
