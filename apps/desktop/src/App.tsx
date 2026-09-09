@@ -349,7 +349,7 @@ export function App() {
                 Mixed: <strong>127.0.0.1:1080</strong>
               </li>
               <li>
-                clash_api: <strong>{apiBase.replace(/^https?:\/\/, "")}</strong>
+                clash_api: <strong>{apiBase.replace("https://", "").replace("http://", "")}</strong>
               </li>
             </ul>
             <div className="field-row" style={{ marginTop: 8 }}>
