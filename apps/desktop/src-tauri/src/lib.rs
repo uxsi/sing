@@ -1,1 +1,1 @@
-file:///workspace/lib_content.txt
+PLACEHOLDER_LOAD_FROM_FILE
