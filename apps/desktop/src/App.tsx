@@ -1,15 +1,23 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   validateConfigText,
   type ValidationResult,
 } from "@sing/controller/validate";
-import {
-  DEFAULT_CLASH_API_BASE,
-  delayTest,
-  getConnections,
-  getProxies,
-} from "@sing/controller/clashApi";
+
 import { fetchSubscriptionBody } from "@sing/controller/subscribeCore";
+import {
+  backendLabel,
+  clashDelay,
+  clashGetConnections,
+  clashGetProxies,
+  coreStart,
+  coreStatus,
+  coreStop,
+  DEFAULT_CLASH_API_BASE,
+  detectBackend,
+  type BackendKind,
+  type CoreStatus,
+} from "./nativeBridge";
 
 type Mode = "office" | "abroad" | "manual";
 
@@ -77,9 +85,12 @@ export function App() {
   const [mode, setMode] = useState<Mode>("office");
   const [connected, setConnected] = useState(false);
   const [logs, setLogs] = useState<string[]>([
-    "[ready] sing desktop phase-2 panel",
-    "[hint] Subscribe / validate / clash_api wired; core connect remains a stub",
+    "[ready] sing desktop — Tauri / Node bridge aware",
+    "[hint] Prefer Tauri on macOS, or local bridge on :8787 for CORS-free clash_api",
   ]);
+  const [backend, setBackend] = useState<BackendKind>("stub");
+  const [coreInfo, setCoreInfo] = useState<CoreStatus | null>(null);
+  const [configPath, setConfigPath] = useState("configs/examples/baseline.json");
 
   const [subUrl, setSubUrl] = useState("");
   const [subStatus, setSubStatus] = useState<string>("");
@@ -116,13 +127,70 @@ export function App() {
     setLogs((prev) => [...prev, `[${ts}] ${line}`]);
   }, []);
 
-  function onToggleConnect() {
-    setConnected((c) => {
-      const next = !c;
-      appendLog(next ? `connect stub (${mode})` : "disconnect stub");
-      return next;
-    });
+  useEffect(() => {
+    void (async () => {
+      const kind = await detectBackend(true);
+      setBackend(kind);
+      appendLog(`backend: ${backendLabel(kind)}`);
+      if (kind !== "stub") {
+        const st = await coreStatus();
+        if (st.status) {
+          setCoreInfo(st.status);
+          setConnected(st.status.state === "running");
+        }
+      }
+    })();
+  }, [appendLog]);
+
+  async function onToggleConnect() {
+    setBusy("core");
+    try {
+      if (connected) {
+        const result = await coreStop();
+        appendLog(result.ok ? "core stop ok" : `core stop: ${result.error ?? "failed"}`);
+        if (result.status) setCoreInfo(result.status);
+        setConnected(false);
+        return;
+      }
+      const result = await coreStart(configPath.trim());
+      if (result.status) setCoreInfo(result.status);
+      if (result.softFail) {
+        appendLog(`core start soft-fail: ${result.error ?? "sing-box missing"}`);
+        setConnected(false);
+        return;
+      }
+      if (!result.ok) {
+        appendLog(`core start: ${result.error ?? "failed"}`);
+        setConnected(false);
+        return;
+      }
+      appendLog(`core start ok (${mode}) config=${configPath}`);
+      setConnected(true);
+    } finally {
+      setBusy(null);
+    }
   }
+
+  async function onRefreshCoreStatus() {
+    setBusy("status");
+    try {
+      const kind = await detectBackend(true);
+      setBackend(kind);
+      const st = await coreStatus();
+      if (st.status) {
+        setCoreInfo(st.status);
+        setConnected(st.status.state === "running");
+      }
+      appendLog(
+        st.ok
+          ? `core status: ${st.status.state}`
+          : `core status: ${st.error ?? "unavailable"}`,
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
 
   async function onFetchSubscribe() {
     setBusy("subscribe");
@@ -169,11 +237,11 @@ export function App() {
     setBusy("proxies");
     setProxyError("");
     try {
-      const result = await getProxies({ baseUrl: apiBase, timeoutMs: 2500 });
-      if (!result.ok) {
+      const result = await clashGetProxies(apiBase);
+      if (!result.ok || !result.data) {
         setProxies([]);
-        setProxyError(result.error);
-        appendLog(`proxies: ${result.error}`);
+        setProxyError(result.error ?? "proxies unavailable");
+        appendLog(`proxies: ${result.error ?? "unavailable"}`);
         return;
       }
       const rows = listProxiesFromPayload(result.data);
@@ -187,10 +255,10 @@ export function App() {
   async function onDelay(name: string) {
     setBusy(`delay:${name}`);
     try {
-      const result = await delayTest(name, { baseUrl: apiBase, timeoutMs: 7000 });
-      if (!result.ok) {
-        appendLog(`delay ${name}: ${result.error}`);
-        setProxyError(result.error);
+      const result = await clashDelay(name, apiBase);
+      if (!result.ok || !result.data) {
+        appendLog(`delay ${name}: ${result.error ?? "failed"}`);
+        setProxyError(result.error ?? "delay failed");
         return;
       }
       const delay = result.data.delay ?? null;
@@ -207,11 +275,10 @@ export function App() {
     setBusy("connections");
     setConnError("");
     try {
-      const result = await getConnections({ baseUrl: apiBase, timeoutMs: 2500 });
-      if (!result.ok) {
+      const result = await clashGetConnections(apiBase);
+      if (!result.ok || !result.data) {
         setConnections([]);
-        setConnError(result.error);
-        appendLog(`connections: ${result.error}`);
+        setConnError(result.error ?? "connections unavailable");
         return;
       }
       const rows = listConnectionsFromPayload(result.data);
@@ -247,12 +314,13 @@ export function App() {
         <header className="topbar">
           <div>
             <h1>Dashboard</h1>
-            <p className="muted">SFM-like shell · Phase 2</p>
+            <p className="muted">SFM-like shell · desktop↔core bridge</p>
           </div>
           <button
             type="button"
             className={"connect" + (connected ? " on" : "")}
-            onClick={onToggleConnect}
+            disabled={busy === "core"}
+            onClick={() => void onToggleConnect()}
           >
             {connected ? "Disconnect" : "Connect"}
           </button>
@@ -265,18 +333,48 @@ export function App() {
             <h2>Status</h2>
             <ul>
               <li>
+                Backend: <strong>{backendLabel(backend)}</strong>
+              </li>
+              <li>
                 Mode: <strong>{mode}</strong>
               </li>
               <li>
-                Core: <strong>{connected ? "stub running" : "stopped"}</strong>
+                Core:{" "}
+                <strong>
+                  {coreInfo?.state ?? (connected ? "running" : "stopped")}
+                  {coreInfo?.softFail ? " (soft-fail)" : ""}
+                </strong>
               </li>
               <li>
                 Mixed: <strong>127.0.0.1:1080</strong>
               </li>
               <li>
-                clash_api: <strong>{apiBase.replace(/^https?:\/\//, "")}</strong>
+                clash_api: <strong>{apiBase.replace(/^https?:\/\/, "")}</strong>
               </li>
             </ul>
+            <div className="field-row" style={{ marginTop: 8 }}>
+              <input
+                className="input"
+                value={configPath}
+                onChange={(e) => setConfigPath(e.target.value)}
+                placeholder="config path for core start"
+              />
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy === "status"}
+                onClick={() => void onRefreshCoreStatus()}
+              >
+                Status
+              </button>
+            </div>
+            {backend === "stub" ? (
+              <p className="status-line warn">
+                Browser stub: use Tauri on macOS or the local bridge on :8787 to
+                start core / call clash_api without CORS.
+              </p>
+            ) : null}
+
           </div>
 
           <div className="card">
@@ -350,7 +448,7 @@ export function App() {
             </div>
             {proxyError ? <p className="status-line warn">{proxyError}</p> : null}
             {!proxyError && proxies.length === 0 ? (
-              <p className="muted">Empty — core not running or clash_api unreachable from browser.</p>
+              <p className="muted">Empty — start core, or use Tauri/bridge (browser CORS blocks :9090).</p>
             ) : (
               <ul className="list">
                 {proxies.map((p) => (

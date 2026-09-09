@@ -11,10 +11,13 @@
 
 ## Phase 1 — macOS 桌面 MVP
 
+> 桌面壳 + 控制面桥见 `docs/05-macos-tauri.md`（Tauri 2 脚手架 + Node bridge）。
+
 - [x] ModeEngine：办公 / 出国 / 手动（`packages/controller` patch + merge + CLI）
 - [x] HealthProbe：双 TUN、脏 DNS 告警分类（fixture + CLI）
 - [x] 桌面 SFM-like 壳：模式切换、状态、日志 stub（`apps/desktop`）
-- [ ] 导入配置、启停 core、Rule/Global/Direct、节点选择（真实进程联调仍待桌面桥）
+- [x] 启停 core 桌面桥（Tauri Rust + Node packages/bridge；UI Connect / Status）
+- [ ] 导入配置、Rule/Global/Direct、节点选择（面板已有 proxies；完整选择器仍待）
 - [ ] TUN 连通（权限引导）
 - [ ] mixed 端口实机联动
 
@@ -30,7 +33,8 @@
 - [x] 配置校验与错误定位（`validate`：结构检查 + CLI + UI）
 - [x] 延迟测试、连接列表（`clashApi`：proxies / connections / delay + CLI + UI）
 - [ ] Windows 适配启动 — **已后置**（先完成 macOS 端到端）
-- [ ] 桌面 ↔ core 实机联调（浏览器直连 `127.0.0.1:9090` 受 CORS/可用性限制，需本地桥或 Tauri）
+- [x] 桌面 ↔ core 桥：Tauri invoke + Node HTTP bridge（:8787）；clash_api 经桥避免 CORS
+- [ ] macOS 实机联调签字（本机有 sing-box + clash_api 时验收 Connect / proxies / delay）
 
 **验收（macOS）**：订阅可更新；校验与 clash_api 面板可用。Windows 验收延后。
 
