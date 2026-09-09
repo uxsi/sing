@@ -15,6 +15,8 @@ export default defineConfig({
       "@sing/controller/subscribeCore": resolve(controllerSrc, "subscribeCore.ts"),
     },
   },
-  server: { port: 5173, host: "127.0.0.1" },
+  clearScreen: false,
+  server: { port: 5173, host: "127.0.0.1", strictPort: true },
+  envPrefix: ["VITE_", "TAURI_"],
   build: { outDir: "dist", emptyOutDir: true },
 });
