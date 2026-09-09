@@ -249,3 +249,11 @@ export async function systemProxySet(enabled: boolean): Promise<{
   }
   return { ok: false, error: "System proxy requires Tauri on macOS", enabled: false };
 }
+
+export async function abroadPickLiveNode(): Promise<Record<string, unknown>> {
+  const kind = await detectBackend();
+  if (kind === "tauri") {
+    return tauriInvoke("abroad_pick_live_node_cmd");
+  }
+  return { ok: false, error: "Need Tauri for abroad live-node pick" };
+}

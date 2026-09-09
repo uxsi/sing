@@ -141,6 +141,7 @@ export function applyModePatch(
 
   // abroad
   setTunStrictRoute(config, true);
+  biasFinalSelector(config, "proxy");
   return {
     config,
     meta: {
@@ -148,10 +149,11 @@ export function applyModePatch(
       applied: true,
       warnDualTun: true,
       description:
-        "Abroad: prefer clean DNS and exclusive TUN; strict_route true; do not force GitHub direct",
+        "Abroad: prefer clean DNS and exclusive TUN; strict_route true; final bias proxy; do not force GitHub direct",
       notes: [
         "Do not insert GitHub direct rules — rely on clean DNS and proxy path",
         "Prefer strict_route true when TUN inbound exists",
+        "Bias final selector toward proxy; desktop picks a live node after start",
         "Warn if dual TUN / company tunnel still present before connect",
       ],
     },
