@@ -92,6 +92,51 @@ fn detect_sing_box() -> Option<String> {
     None
 }
 
+
+fn is_repo_root(dir: &Path) -> bool {
+    dir.join("configs/examples").is_dir() && dir.join("apps/desktop").is_dir()
+}
+
+fn find_repo_root(start: &Path) -> Option<PathBuf> {
+    for ancestor in start.ancestors() {
+        if is_repo_root(ancestor) {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+/// Resolve config paths for Tauri: absolute paths unchanged; relative paths try
+/// cwd first, then walk up to the monorepo root (cwd is often `apps/desktop/src-tauri`).
+fn resolve_config_path(input: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(input);
+    if path.as_os_str().is_empty() {
+        return Err("config path is empty".into());
+    }
+    if path.is_absolute() {
+        return if path.is_file() {
+            Ok(path)
+        } else {
+            Err(format!("config not found: {}", path.display()))
+        };
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let from_cwd = cwd.join(&path);
+    if from_cwd.is_file() {
+        return Ok(from_cwd);
+    }
+    if let Some(root) = find_repo_root(&cwd) {
+        let from_root = root.join(&path);
+        if from_root.is_file() {
+            return Ok(from_root);
+        }
+    }
+    Err(format!(
+        "config not found for relative path `{input}` (looked from cwd and monorepo root)"
+    ))
+}
+
 fn clash_get(path: &str, base: Option<String>) -> Result<Value, String> {
     let base = base.unwrap_or_else(|| DEFAULT_CLASH_API.to_string());
     let base = base.trim_end_matches('/');
@@ -130,10 +175,24 @@ fn core_start(config_path: String) -> Value {
         let _ = child.kill();
         let _ = child.wait();
     }
-    let path = PathBuf::from(&config_path);
-    state.config_path = Some(path.to_string_lossy().into_owned());
     state.soft_fail = false;
     state.last_error = None;
+
+    let resolved = match resolve_config_path(&config_path) {
+        Ok(path) => path,
+        Err(err) => {
+            state.state = "crashed".into();
+            state.config_path = Some(config_path);
+            state.last_error = Some(err.clone());
+            return json!({
+                "ok": false,
+                "error": err,
+                "status": state.status()
+            });
+        }
+    };
+    let resolved_str = resolved.to_string_lossy().into_owned();
+    state.config_path = Some(resolved_str.clone());
 
     let Some(binary) = detect_sing_box() else {
         state.state = "missing_binary".into();
@@ -150,7 +209,7 @@ fn core_start(config_path: String) -> Value {
     state.binary = Some(binary.clone());
 
     match Command::new(&binary)
-        .args(["run", "-c", &config_path])
+        .args(["run", "-c", &resolved_str])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
