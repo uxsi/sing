@@ -7,6 +7,7 @@ import {
 import { fetchSubscriptionBody } from "@sing/controller/subscribeCore";
 import {
   backendLabel,
+  abroadPickLiveNode,
   clashDelay,
   clashGetConnections,
   clashGetProxies,
@@ -204,6 +205,18 @@ export function App() {
       appendLog(`core start ok (${mode}) config=${configPath}`);
       if ((result as { warning?: string }).warning) {
         appendLog(String((result as { warning?: string }).warning));
+      }
+      const abroadLive = (result as { abroadLive?: Record<string, unknown> }).abroadLive;
+      if (abroadLive) {
+        if (abroadLive.ok) {
+          appendLog(
+            `abroad live node: ${String(abroadLive.picked ?? "n/a")} (final→proxy)`,
+          );
+        } else {
+          appendLog(
+            `abroad live node failed: ${String(abroadLive.error ?? "unknown")}`,
+          );
+        }
       }
       setConnected(true);
     } finally {
@@ -530,6 +543,30 @@ export function App() {
           <div className="card">
             <div className="card-head">
               <h2>Proxies</h2>
+              <button
+                type="button"
+                className="ghost"
+                disabled={!!busy || !connected}
+                title="Probe proxy members; pick first live (Abroad)"
+                onClick={() => {
+                  void (async () => {
+                    setBusy("abroad-live");
+                    try {
+                      const r = await abroadPickLiveNode();
+                      if (r.ok) {
+                        appendLog(`abroad live node: ${String(r.picked ?? "n/a")} (final→proxy)`);
+                        void onRefreshProxies();
+                      } else {
+                        appendLog(`abroad live node failed: ${String(r.error ?? "unknown")}`);
+                      }
+                    } finally {
+                      setBusy(null);
+                    }
+                  })();
+                }}
+              >
+                Pick live node
+              </button>
               <button
                 type="button"
                 className="ghost"

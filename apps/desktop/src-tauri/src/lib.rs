@@ -394,6 +394,25 @@ fn write_mode_patched_config(src: &Path, mode: &str) -> Result<PathBuf, String> 
             );
         }
     } else if mode == "abroad" {
+        // Prefer proxy path for unmatched traffic (office does the opposite).
+        if let Some(outs) = value.get_mut("outbounds").and_then(|v| v.as_array_mut()) {
+            for ob in outs.iter_mut() {
+                if ob.get("type").and_then(|t| t.as_str()) == Some("selector")
+                    && ob.get("tag").and_then(|t| t.as_str()) == Some("final")
+                {
+                    let has_proxy = ob
+                        .get("outbounds")
+                        .and_then(|o| o.as_array())
+                        .map(|arr| arr.iter().any(|x| x.as_str() == Some("proxy")))
+                        .unwrap_or(false);
+                    if has_proxy {
+                        if let Some(obj) = ob.as_object_mut() {
+                            obj.insert("default".into(), Value::String("proxy".into()));
+                        }
+                    }
+                }
+            }
+        }
         if let Some(inbounds) = value.get_mut("inbounds").and_then(|v| v.as_array_mut()) {
             for ib in inbounds.iter_mut() {
                 if ib.get("type").and_then(|t| t.as_str()) == Some("tun") {
@@ -592,6 +611,11 @@ fn core_start(config_path: String, mode: Option<String>) -> Value {
             if mode_name.eq_ignore_ascii_case("office") {
                 force_office_selector_direct();
             }
+            let abroad_pick = if mode_name.eq_ignore_ascii_case("abroad") {
+                Some(abroad_pick_live_node())
+            } else {
+                None
+            };
             let mut out = json!({ "ok": true, "status": status });
             if let Some(dp) = dp {
                 out.as_object_mut().unwrap().insert("dataplane".into(), json!(dp));
@@ -601,6 +625,11 @@ fn core_start(config_path: String, mode: Option<String>) -> Value {
                         json!("dataplane=mixed-only (no TUN on macOS desktop yet) — use System Proxy for app traffic"),
                     );
                 }
+            }
+            if let Some(pick) = abroad_pick {
+                out.as_object_mut()
+                    .unwrap()
+                    .insert("abroadLive".into(), pick);
             }
             return out;
         }
@@ -637,13 +666,24 @@ fn core_start(config_path: String, mode: Option<String>) -> Value {
                                 if mode_name.eq_ignore_ascii_case("office") {
                                     force_office_selector_direct();
                                 }
-                                return json!({
+                                let abroad_live = if mode_name.eq_ignore_ascii_case("abroad") {
+                                    Some(abroad_pick_live_node())
+                                } else {
+                                    None
+                                };
+                                let mut out = json!({
                                     "ok": true,
                                     "fallback": "mixed-only",
                                     "dataplane": "mixed-only",
                                     "warning": "TUN not permitted; started mixed-only fallback — enable System Proxy for app traffic",
                                     "status": status
                                 });
+                                if let Some(pick) = abroad_live {
+                                    out.as_object_mut()
+                                        .unwrap()
+                                        .insert("abroadLive".into(), pick);
+                                }
+                                return out;
                             }
                             SpawnOutcome::Exited { status, stderr } => {
                                 let mut message2 = format!(
@@ -711,6 +751,137 @@ fn clash_get_connections(base_url: Option<String>) -> Value {
         Ok(data) => json!({ "ok": true, "data": data }),
         Err(error) => json!({ "ok": false, "error": error, "code": "CORE_UNAVAILABLE" }),
     }
+}
+
+
+fn clash_put_proxy(group: &str, name: &str) -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!(
+        "{DEFAULT_CLASH_API}/proxies/{}",
+        urlencoding_encode(group)
+    );
+    let body = serde_json::json!({ "name": name });
+    let resp = client
+        .put(&url)
+        .json(&body)
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("clash put {group}=>{name} HTTP {}", resp.status()));
+    }
+    Ok(())
+}
+
+fn clash_delay_ms(name: &str) -> Option<u64> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .ok()?;
+    let encoded = urlencoding_encode(name);
+    let url = format!(
+        "{DEFAULT_CLASH_API}/proxies/{encoded}/delay?timeout=5000&url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204"
+    );
+    let resp = client.get(&url).send().ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let data: Value = resp.json().ok()?;
+    data.get("delay").and_then(|v| v.as_u64())
+}
+
+/// Probe `proxy` selector members; pick first live node; force `final` → `proxy`.
+fn abroad_pick_live_node() -> Value {
+    // clash API may need a moment after listen
+    for _ in 0..12 {
+        std::thread::sleep(Duration::from_millis(200));
+        let proxies = match clash_get("/proxies", None) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let map = proxies
+            .get("proxies")
+            .cloned()
+            .unwrap_or(proxies);
+        let Some(proxy_group) = map.get("proxy") else {
+            continue;
+        };
+        let candidates: Vec<String> = proxy_group
+            .get("all")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .filter(|s| {
+                        let u = s.to_ascii_uppercase();
+                        u != "DIRECT" && u != "REJECT" && u != "PROXY"
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if candidates.is_empty() {
+            // single named outbound used as proxy group now
+            if let Some(now) = proxy_group.get("now").and_then(|v| v.as_str()) {
+                let _ = clash_put_proxy("final", "proxy");
+                return json!({
+                    "ok": true,
+                    "picked": now,
+                    "probed": 0,
+                    "note": "proxy group has no all[]; left now as-is and set final→proxy"
+                });
+            }
+            continue;
+        }
+
+        let mut probed = Vec::new();
+        let mut picked: Option<String> = None;
+        for name in &candidates {
+            let delay = clash_delay_ms(name);
+            probed.push(json!({ "name": name, "delay": delay }));
+            if delay.is_some() && picked.is_none() {
+                picked = Some(name.clone());
+            }
+        }
+
+        if let Some(ref name) = picked {
+            if let Err(err) = clash_put_proxy("proxy", name) {
+                return json!({ "ok": false, "error": err, "probed": probed });
+            }
+        }
+        if let Err(err) = clash_put_proxy("final", "proxy") {
+            return json!({ "ok": false, "error": err, "probed": probed, "picked": picked });
+        }
+
+        return if picked.is_some() {
+            json!({
+                "ok": true,
+                "picked": picked,
+                "probed": probed,
+                "final": "proxy"
+            })
+        } else {
+            json!({
+                "ok": false,
+                "error": "no live proxy nodes (all delay failed)",
+                "probed": probed,
+                "final": "proxy",
+                "code": "NO_LIVE_NODE"
+            })
+        };
+    }
+    json!({
+        "ok": false,
+        "error": "clash_api proxies unavailable while picking abroad live node",
+        "code": "CORE_UNAVAILABLE"
+    })
+}
+
+
+#[tauri::command]
+fn abroad_pick_live_node_cmd() -> Value {
+    abroad_pick_live_node()
 }
 
 #[tauri::command]
@@ -1229,6 +1400,7 @@ pub fn run() {
             clash_get_proxies,
             clash_get_connections,
             clash_delay,
+            abroad_pick_live_node_cmd,
             validate_config,
             health_classify,
             system_proxy_status,
