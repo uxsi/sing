@@ -166,6 +166,9 @@ export function App() {
         return;
       }
       appendLog(`core start ok (${mode}) config=${configPath}`);
+      if ((result as { warning?: string }).warning) {
+        appendLog(String((result as { warning?: string }).warning));
+      }
       setConnected(true);
     } finally {
       setBusy(null);
