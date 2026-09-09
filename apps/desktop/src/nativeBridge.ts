@@ -218,3 +218,33 @@ export async function bridgeValidate(
   }
   return { ok: false, errors: [{ path: "$", message: "use local validateConfigText" }] };
 }
+
+export async function systemProxyStatus(): Promise<{
+  ok: boolean;
+  enabled?: boolean;
+  host?: string;
+  port?: number;
+  error?: string;
+}> {
+  const kind = await detectBackend();
+  if (kind === "tauri") {
+    return tauriInvoke("system_proxy_status");
+  }
+  return { ok: false, error: "System proxy requires Tauri on macOS", enabled: false };
+}
+
+export async function systemProxySet(enabled: boolean): Promise<{
+  ok: boolean;
+  enabled?: boolean;
+  host?: string;
+  port?: number;
+  services?: string[];
+  warnings?: string[];
+  error?: string;
+}> {
+  const kind = await detectBackend();
+  if (kind === "tauri") {
+    return tauriInvoke("system_proxy_set", { enabled });
+  }
+  return { ok: false, error: "System proxy requires Tauri on macOS", enabled: false };
+}

@@ -4,7 +4,9 @@
   "identifier": "dev.sing.desktop",
   "build": {
     "devUrl": "http://127.0.0.1:5173",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [
