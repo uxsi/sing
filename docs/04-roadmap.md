@@ -17,7 +17,8 @@
 - [x] HealthProbe：双 TUN、脏 DNS 告警分类（fixture + CLI）
 - [x] 桌面 SFM-like 壳：模式切换、状态、日志 stub（`apps/desktop`）
 - [x] 启停 core 桌面桥（Tauri Rust + Node packages/bridge；UI Connect / Status）
-- [ ] 导入配置、Rule/Global/Direct、节点选择（面板已有 proxies；完整选择器仍待）
+- [ ] 导入配置、Rule/Global/Direct（仍待）
+- [x] 节点选择（Proxies 面板：selector `now` + 成员一键 Select）
 - [ ] TUN 连通（权限引导）
 - [ ] mixed 端口实机联动
 

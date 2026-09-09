@@ -257,3 +257,14 @@ export async function abroadPickLiveNode(): Promise<Record<string, unknown>> {
   }
   return { ok: false, error: "Need Tauri for abroad live-node pick" };
 }
+
+export async function clashSelectProxy(
+  group: string,
+  name: string,
+): Promise<{ ok: boolean; group?: string; name?: string; error?: string }> {
+  const kind = await detectBackend();
+  if (kind === "tauri") {
+    return tauriInvoke("clash_select_proxy", { group, name });
+  }
+  return { ok: false, error: "Need Tauri to select proxy node" };
+}
