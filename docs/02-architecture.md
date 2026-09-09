@@ -66,8 +66,9 @@
 ```
 sing/
   docs/           # 本方案
-  apps/desktop/   # UI 壳
-  crates/ or packages/controller/  # 控制面
+  apps/desktop/   # UI 壳 (+ src-tauri Tauri 2, macOS)
+  packages/controller/  # 控制面
+  packages/bridge/      # 本地 HTTP 桥（CORS-free / 云测）
   third_party/sing-box/  # 版本钉扎说明（不强制 vendoring）
   configs/examples/      # 示例配置与模式补丁样例
 ```
