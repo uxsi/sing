@@ -159,7 +159,7 @@ export function App() {
         if (result.status) setCoreInfo(result.status);
         setConnected(false);
         setSystemProxy(false);
-        appendLog("system proxy: off (cleared with disconnect)");
+        // core_stop already clears OS proxy; Off toggle does the same without disconnect.
         return;
       }
       const result = await coreStart(configPath.trim(), mode);
