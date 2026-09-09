@@ -87,7 +87,15 @@ Browser pages cannot reliably call `http://127.0.0.1:9090` (CORS). Always use Ta
 
 ## Later
 
-- macOS TUN entitlements / System Extension guidance
+- macOS TUN entitlements / System Extension guidance (real TUN beyond mixed-only)
+
+## Dataplane (current)
+
+Desktop macOS defaults to **mixed-only** (no utun): Connect strips TUN from the running config and relies on **System Proxy → 127.0.0.1:1080** for app traffic.
+
+- Set `SING_TRY_TUN=1` to attempt TUN first; on permission failure the existing mixed-only fallback still applies.
+- Full TUN via Network Extension / entitlements remains **later** (see backlog below).
+
 - Packaging signed `.app` / DMG
 - Windows skeleton (explicitly deferred)
 
