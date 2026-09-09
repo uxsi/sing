@@ -879,6 +879,20 @@ fn abroad_pick_live_node() -> Value {
 }
 
 
+
+#[tauri::command]
+fn clash_select_proxy(group: String, name: String) -> Value {
+    let group = group.trim();
+    let name = name.trim();
+    if group.is_empty() || name.is_empty() {
+        return json!({ "ok": false, "error": "group and name are required", "code": "INVALID" });
+    }
+    match clash_put_proxy(group, name) {
+        Ok(()) => json!({ "ok": true, "group": group, "name": name }),
+        Err(error) => json!({ "ok": false, "error": error }),
+    }
+}
+
 #[tauri::command]
 fn abroad_pick_live_node_cmd() -> Value {
     abroad_pick_live_node()
@@ -1401,6 +1415,7 @@ pub fn run() {
             clash_get_connections,
             clash_delay,
             abroad_pick_live_node_cmd,
+            clash_select_proxy,
             validate_config,
             health_classify,
             system_proxy_status,

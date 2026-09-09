@@ -11,6 +11,7 @@ import {
   clashDelay,
   clashGetConnections,
   clashGetProxies,
+  clashSelectProxy,
   coreStart,
   coreStatus,
   coreStop,
@@ -33,6 +34,8 @@ interface ProxyRow {
   name: string;
   type?: string;
   delayMs?: number | null;
+  now?: string | null;
+  all?: string[];
 }
 
 interface ConnRow {
@@ -55,10 +58,15 @@ function listProxiesFromPayload(data: Record<string, unknown>): ProxyRow[] {
     .filter(([name]) => name !== "GLOBAL" || true)
     .map(([name, info]) => {
       const obj = (info ?? {}) as Record<string, unknown>;
+      const all = Array.isArray(obj.all)
+        ? (obj.all as unknown[]).filter((x): x is string => typeof x === "string")
+        : [];
       return {
         name,
         type: typeof obj.type === "string" ? obj.type : undefined,
         delayMs: null,
+        now: typeof obj.now === "string" ? obj.now : null,
+        all,
       };
     })
     .filter((p) => p.name !== "Compatible")
@@ -357,6 +365,24 @@ export function App() {
     }
   }
 
+  async function onSelectProxy(group: string, name: string) {
+    setBusy(`select:${group}:${name}`);
+    try {
+      const result = await clashSelectProxy(group, name);
+      if (!result.ok) {
+        appendLog(`select ${group}→${name}: ${result.error ?? "failed"}`);
+        setProxyError(result.error ?? "select failed");
+        return;
+      }
+      appendLog(`select ${group}→${name}`);
+      setProxies((prev) =>
+        prev.map((p) => (p.name === group ? { ...p, now: name } : p)),
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function onRefreshConnections() {
     setBusy("connections");
     setConnError("");
@@ -582,23 +608,42 @@ export function App() {
             ) : (
               <ul className="list">
                 {proxies.map((p) => (
-                  <li key={p.name} className="list-row">
-                    <div>
-                      <strong>{p.name}</strong>
-                      <span className="muted">
-                        {" "}
-                        {p.type ?? ""}
-                        {p.delayMs != null ? ` · ${p.delayMs} ms` : ""}
-                      </span>
+                  <li key={p.name} className="list-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
+                    <div className="list-row" style={{ padding: 0 }}>
+                      <div>
+                        <strong>{p.name}</strong>
+                        <span className="muted">
+                          {" "}
+                          {p.type ?? ""}
+                          {p.now ? ` · now=${p.now}` : ""}
+                          {p.delayMs != null ? ` · ${p.delayMs} ms` : ""}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={busy === `delay:${p.name}`}
+                        onClick={() => void onDelay(p.name)}
+                      >
+                        Delay
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={busy === `delay:${p.name}`}
-                      onClick={() => void onDelay(p.name)}
-                    >
-                      Delay
-                    </button>
+                    {(p.type === "Selector" || p.type === "selector") && p.all && p.all.length > 0 ? (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                        {p.all.map((member) => (
+                          <button
+                            key={member}
+                            type="button"
+                            className={"ghost" + (p.now === member ? " primary" : "")}
+                            disabled={!!busy || !connected}
+                            title={`Select ${member} in ${p.name}`}
+                            onClick={() => void onSelectProxy(p.name, member)}
+                          >
+                            {member}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ul>
