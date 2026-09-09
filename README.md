@@ -16,8 +16,9 @@ Kernel = official sing-box. This repo does not fork the core.
 
 ## Layout
 
-apps/desktop - Vite + React panel
+apps/desktop - Vite + React panel (+ src-tauri Tauri 2 macOS shell)
 packages/controller - Mode patches, health probe, core supervisor, subscribe, validate, clash_api, CLI, merge
+packages/bridge - Local HTTP bridge (127.0.0.1:8787) for UI to controller without CORS
 configs/examples - Baseline + mode patches + health fixtures / rules
 docs/ - Product and architecture docs
 
@@ -26,7 +27,15 @@ docs/ - Product and architecture docs
 npm install
 npm test
 
-then build and start the desktop with the root scripts
+Desktop UI (browser stub or with bridge):
+
+npm run bridge          # terminal A — optional, needed for core/clash without Tauri
+npm run desktop:dev     # terminal B — Vite on 127.0.0.1:5173
+
+macOS Tauri (preferred for real core start): see docs/05-macos-tauri.md
+
+npm run desktop:dev
+cd apps/desktop && cargo tauri dev
 
 ## CLI
 
@@ -54,4 +63,4 @@ Examples (prefix with workspace cli runner):
 
 ## Docs
 
-See docs/.
+See docs/. macOS Tauri / bridge: docs/05-macos-tauri.md.

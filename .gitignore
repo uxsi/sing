@@ -9,3 +9,6 @@ coverage/
 .vite/
 *.tsbuildinfo
 .turbo/
+
+# Tauri / Rust
+apps/desktop/src-tauri/target/
