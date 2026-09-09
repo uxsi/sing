@@ -111,16 +111,17 @@ export async function coreStatus(): Promise<{ ok: boolean; status: CoreStatus; e
 
 export async function coreStart(
   configPath: string,
-): Promise<{ ok: boolean; softFail?: boolean; error?: string; status?: CoreStatus }> {
+  mode: string = "manual",
+): Promise<{ ok: boolean; softFail?: boolean; error?: string; status?: CoreStatus; warning?: string }> {
   const kind = await detectBackend();
   if (kind === "tauri") {
-    return tauriInvoke("core_start", { configPath });
+    return tauriInvoke("core_start", { configPath, mode });
   }
   if (kind === "bridge") {
     return bridgeFetch("/core/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ configPath }),
+      body: JSON.stringify({ configPath, mode }),
     });
   }
   return {

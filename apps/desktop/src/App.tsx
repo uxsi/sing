@@ -162,7 +162,7 @@ export function App() {
         appendLog("system proxy: off (cleared with disconnect)");
         return;
       }
-      const result = await coreStart(configPath.trim());
+      const result = await coreStart(configPath.trim(), mode);
       if (result.status) setCoreInfo(result.status);
       if (result.softFail) {
         appendLog(`core start soft-fail: ${result.error ?? "sing-box missing"}`);

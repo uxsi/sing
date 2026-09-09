@@ -266,6 +266,100 @@ fn looks_like_tun_permission_error(message: &str) -> bool {
             || lower.contains("configure tun interface"))
 }
 
+
+/// Apply office/abroad mode tweaks and write a temp config for sing-box to run.
+/// manual → copy as-is (still materialize so TUN stripping can chain off it).
+fn write_mode_patched_config(src: &Path, mode: &str) -> Result<PathBuf, String> {
+    let raw = std::fs::read_to_string(src).map_err(|e| e.to_string())?;
+    let mut value: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let mode = mode.trim().to_ascii_lowercase();
+
+    if mode == "office" {
+        // Bias selector tag=final default → direct (UI promises this).
+        if let Some(outs) = value.get_mut("outbounds").and_then(|v| v.as_array_mut()) {
+            for ob in outs.iter_mut() {
+                if ob.get("type").and_then(|t| t.as_str()) == Some("selector")
+                    && ob.get("tag").and_then(|t| t.as_str()) == Some("final")
+                {
+                    let has_direct = ob
+                        .get("outbounds")
+                        .and_then(|o| o.as_array())
+                        .map(|arr| arr.iter().any(|x| x.as_str() == Some("direct")))
+                        .unwrap_or(false);
+                    if has_direct {
+                        ob.as_object_mut()
+                            .ok_or_else(|| "final outbound not an object".to_string())?
+                            .insert("default".into(), Value::String("direct".into()));
+                    }
+                }
+            }
+        }
+        // GitHub / ssh / git → direct before geosite-github→proxy
+        if let Some(rules) = value
+            .pointer_mut("/route/rules")
+            .and_then(|v| v.as_array_mut())
+        {
+            let mut insert_at = 0usize;
+            while insert_at < rules.len() {
+                let r = &rules[insert_at];
+                let action = r.get("action").and_then(|a| a.as_str()).unwrap_or("");
+                let proto = r.get("protocol");
+                let is_dns = action == "sniff"
+                    || action == "hijack-dns"
+                    || proto.and_then(|p| p.as_str()) == Some("dns")
+                    || proto
+                        .and_then(|p| p.as_array())
+                        .map(|a| a.iter().any(|x| x.as_str() == Some("dns")))
+                        .unwrap_or(false);
+                if is_dns {
+                    insert_at += 1;
+                    continue;
+                }
+                break;
+            }
+            let protect = vec![
+                serde_json::json!({
+                    "domain_suffix": ["github.com", "githubusercontent.com"],
+                    "outbound": "direct"
+                }),
+                serde_json::json!({
+                    "process_name": ["ssh", "git"],
+                    "outbound": "direct"
+                }),
+            ];
+            for (i, rule) in protect.into_iter().enumerate() {
+                rules.insert(insert_at + i, rule);
+            }
+        }
+        // coexistence with company tunnel
+        if let Some(inbounds) = value.get_mut("inbounds").and_then(|v| v.as_array_mut()) {
+            for ib in inbounds.iter_mut() {
+                if ib.get("type").and_then(|t| t.as_str()) == Some("tun") {
+                    if let Some(obj) = ib.as_object_mut() {
+                        obj.insert("strict_route".into(), Value::Bool(false));
+                    }
+                }
+            }
+        }
+    } else if mode == "abroad" {
+        if let Some(inbounds) = value.get_mut("inbounds").and_then(|v| v.as_array_mut()) {
+            for ib in inbounds.iter_mut() {
+                if ib.get("type").and_then(|t| t.as_str()) == Some("tun") {
+                    if let Some(obj) = ib.as_object_mut() {
+                        obj.insert("strict_route".into(), Value::Bool(true));
+                    }
+                }
+            }
+        }
+    }
+
+    let dir = runtime_dir()?;
+    let out = dir.join(format!("baseline-{mode}.json"));
+    let body = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    std::fs::write(&out, body + "\n").map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// Write a temp config with TUN inbounds removed (mixed/HTTP only) for unprivileged macOS.
 fn write_config_without_tun(src: &Path) -> Result<PathBuf, String> {
     let raw = std::fs::read_to_string(src).map_err(|e| e.to_string())?;
@@ -351,7 +445,7 @@ fn core_status() -> Value {
 }
 
 #[tauri::command]
-fn core_start(config_path: String) -> Value {
+fn core_start(config_path: String, mode: Option<String>) -> Value {
     let mut state = CORE.lock().expect("core lock");
     if let Some(mut child) = state.child.take() {
         let _ = child.kill();
@@ -374,6 +468,21 @@ fn core_start(config_path: String) -> Value {
         }
     };
     let resolved_str = resolved.to_string_lossy().into_owned();
+    let mode_name = mode.unwrap_or_else(|| "manual".into());
+    let patched = match write_mode_patched_config(&resolved, &mode_name) {
+        Ok(path) => path,
+        Err(err) => {
+            state.state = "crashed".into();
+            state.config_path = Some(resolved_str);
+            state.last_error = Some(format!("mode patch failed: {err}"));
+            return json!({
+                "ok": false,
+                "error": format!("mode patch failed: {err}"),
+                "status": state.status()
+            });
+        }
+    };
+    let resolved_str = patched.to_string_lossy().into_owned();
     state.config_path = Some(resolved_str.clone());
 
     let Some(binary) = detect_sing_box() else {
