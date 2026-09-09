@@ -341,6 +341,21 @@ fn write_mode_patched_config(src: &Path, mode: &str) -> Result<PathBuf, String> 
                 }
             }
         }
+        // Dead proxy node must not break DNS for direct sites (Google etc.) under system proxy.
+        if value.get("dns").and_then(|d| d.get("servers")).is_some() {
+            if let Some(dns) = value.get_mut("dns").and_then(|d| d.as_object_mut()) {
+                let has_local = dns
+                    .get("servers")
+                    .and_then(|s| s.as_array())
+                    .map(|arr| {
+                        arr.iter().any(|s| s.get("tag").and_then(|t| t.as_str()) == Some("dns-local"))
+                    })
+                    .unwrap_or(false);
+                if has_local {
+                    dns.insert("final".into(), Value::String("dns-local".into()));
+                }
+            }
+        }
     } else if mode == "abroad" {
         if let Some(inbounds) = value.get_mut("inbounds").and_then(|v| v.as_array_mut()) {
             for ib in inbounds.iter_mut() {
@@ -1003,15 +1018,21 @@ fn system_proxy_set(enabled: bool) -> Value {
                 "warnings": errors,
             })
         } else {
-            if !state.enabled {
-                return json!({ "ok": true, "enabled": false, "host": MIXED_HOST, "port": 1080 });
-            }
+            // Always clear OS proxies on Off — even if in-memory state was lost (HMR / restart)
+            // while React still showed On, or macOS was left pointing at :1080.
             let mut errors = Vec::new();
-            for snap in &state.saved {
-                if let Err(err) = restore_service(snap) {
-                    // fall back to forcing off
-                    let _ = disable_sing_proxy_on_service(&snap.service);
-                    errors.push(format!("{}: {err}", snap.service));
+            if !state.saved.is_empty() {
+                for snap in &state.saved {
+                    if let Err(err) = restore_service(snap) {
+                        let _ = disable_sing_proxy_on_service(&snap.service);
+                        errors.push(format!("{}: {err}", snap.service));
+                    }
+                }
+            } else if let Ok(services) = list_network_services() {
+                for svc in services {
+                    if let Err(err) = disable_sing_proxy_on_service(&svc) {
+                        errors.push(format!("{svc}: {err}"));
+                    }
                 }
             }
             state.enabled = false;

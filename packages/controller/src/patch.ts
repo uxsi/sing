@@ -106,6 +106,15 @@ export function applyModePatch(
 
     setTunStrictRoute(config, false);
     biasFinalSelector(config, "direct");
+    // Prefer local DNS in office so a dead proxy node does not break direct sites.
+    if (config.dns && Array.isArray(config.dns.servers)) {
+      const hasLocal = config.dns.servers.some(
+        (s: { tag?: string }) => s && s.tag === "dns-local",
+      );
+      if (hasLocal) {
+        config.dns.final = "dns-local";
+      }
+    }
 
     return {
       config,
