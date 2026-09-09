@@ -26,7 +26,7 @@ UI picks a backend automatically:
 - Rust via rustup (see https://rustup.rs )
 - Recent stable rustc (Tauri 2 deps currently want **≥ 1.88**; run `rustup update`)
 - Tauri CLI 2.x: `cargo install tauri-cli --version "^2"` or workspace `@tauri-apps/cli`
-- Optional: `sing-box` on `PATH` or under `bin/`. Missing binary → **soft-fail**.
+- Prefer bundled sidecar: run `./scripts/fetch-sing-box.sh` (pins `third_party/sing-box/VERSION`). Falls back to `PATH` / `bin/`. Missing binary → **soft-fail**.
 
 ## Install (repo root)
 

@@ -69,14 +69,86 @@ impl CoreState {
 
 static CORE: Lazy<Mutex<CoreState>> = Lazy::new(|| Mutex::new(CoreState::new()));
 
+fn candidate_exists(path: &Path) -> Option<String> {
+    if path.is_file() {
+        Some(path.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
 fn detect_sing_box() -> Option<String> {
+    // 1) Next to the running executable (Tauri externalBin / packaged app)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for name in ["sing-box", "singbox"] {
+                if let Some(p) = candidate_exists(&dir.join(name)) {
+                    return Some(p);
+                }
+            }
+            // cargo tauri dev often keeps externalBin as sing-box-<triple> beside the exe
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for ent in rd.flatten() {
+                    let name = ent.file_name();
+                    let name = name.to_string_lossy();
+                    if name == "sing-box" || name.starts_with("sing-box-") {
+                        if let Some(p) = candidate_exists(&ent.path()) {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2) Dev: apps/desktop/src-tauri/binaries/sing-box-<triple>
+    if let Ok(cwd) = std::env::current_dir() {
+        let triples = [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+        ];
+        let mut search_roots: Vec<PathBuf> = vec![cwd.clone()];
+        if let Some(root) = find_repo_root(&cwd) {
+            search_roots.push(root.join("apps/desktop/src-tauri"));
+            search_roots.push(root);
+        }
+        // also walk up a few levels from cwd for src-tauri
+        for ancestor in cwd.ancestors().take(6) {
+            search_roots.push(ancestor.to_path_buf());
+        }
+        for root in search_roots {
+            let bin_dir = if root.join("binaries").is_dir() {
+                root.join("binaries")
+            } else if root.join("apps/desktop/src-tauri/binaries").is_dir() {
+                root.join("apps/desktop/src-tauri/binaries")
+            } else {
+                continue;
+            };
+            for triple in triples {
+                if let Some(p) = candidate_exists(&bin_dir.join(format!("sing-box-{triple}"))) {
+                    return Some(p);
+                }
+            }
+            if let Some(p) = candidate_exists(&bin_dir.join("sing-box")) {
+                return Some(p);
+            }
+            // repo-root bin/ (docs)
+            if let Some(p) = candidate_exists(&root.join("bin/sing-box")) {
+                return Some(p);
+            }
+        }
+    }
+
+    // 3) PATH + common Homebrew locations (fallback)
     let candidates = ["sing-box", "singbox"];
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path_var) {
             for name in candidates {
                 let full = dir.join(name);
-                if full.is_file() {
-                    return Some(full.to_string_lossy().into_owned());
+                if let Some(p) = candidate_exists(&full) {
+                    return Some(p);
                 }
             }
         }
@@ -84,8 +156,8 @@ fn detect_sing_box() -> Option<String> {
     for extra in ["/usr/local/bin", "/opt/homebrew/bin"] {
         for name in candidates {
             let full = Path::new(extra).join(name);
-            if full.is_file() {
-                return Some(full.to_string_lossy().into_owned());
+            if let Some(p) = candidate_exists(&full) {
+                return Some(p);
             }
         }
     }
