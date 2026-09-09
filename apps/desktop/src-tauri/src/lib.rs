@@ -1,1 +1,1 @@
-PLACEHOLDER
+file:///workspace/lib_content.txt
