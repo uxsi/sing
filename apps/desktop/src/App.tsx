@@ -15,6 +15,8 @@ import {
   coreStop,
   DEFAULT_CLASH_API_BASE,
   detectBackend,
+  systemProxySet,
+  systemProxyStatus,
   type BackendKind,
   type CoreStatus,
 } from "./nativeBridge";
@@ -84,6 +86,8 @@ function listConnectionsFromPayload(data: Record<string, unknown>): ConnRow[] {
 export function App() {
   const [mode, setMode] = useState<Mode>("office");
   const [connected, setConnected] = useState(false);
+  const [systemProxy, setSystemProxy] = useState(false);
+  const [systemProxyBusy, setSystemProxyBusy] = useState(false);
   const [logs, setLogs] = useState<string[]>([
     "[ready] sing desktop — Tauri / Node bridge aware",
     "[hint] Prefer Tauri on macOS, or local bridge on :8787 for CORS-free clash_api",
@@ -139,6 +143,10 @@ export function App() {
           setConnected(st.status.state === "running");
         }
       }
+      if (kind === "tauri") {
+        const sp = await systemProxyStatus();
+        if (sp.ok && typeof sp.enabled === "boolean") setSystemProxy(sp.enabled);
+      }
     })();
   }, [appendLog]);
 
@@ -150,9 +158,11 @@ export function App() {
         appendLog(result.ok ? "core stop ok" : `core stop: ${result.error ?? "failed"}`);
         if (result.status) setCoreInfo(result.status);
         setConnected(false);
+        setSystemProxy(false);
+        appendLog("system proxy: off (cleared with disconnect)");
         return;
       }
-      const result = await coreStart(configPath.trim());
+      const result = await coreStart(configPath.trim(), mode);
       if (result.status) setCoreInfo(result.status);
       if (result.softFail) {
         appendLog(`core start soft-fail: ${result.error ?? "sing-box missing"}`);
@@ -172,6 +182,38 @@ export function App() {
       setConnected(true);
     } finally {
       setBusy(null);
+    }
+  }
+
+
+  async function onToggleSystemProxy() {
+    if (backend !== "tauri") {
+      appendLog("system proxy: need Tauri on macOS");
+      return;
+    }
+    setSystemProxyBusy(true);
+    try {
+      const next = !systemProxy;
+      if (next && !connected) {
+        appendLog("system proxy: connect core first (needs :1080)");
+        return;
+      }
+      const result = await systemProxySet(next);
+      if (!result.ok) {
+        appendLog(`system proxy: ${result.error ?? "failed"}`);
+        return;
+      }
+      setSystemProxy(Boolean(result.enabled));
+      appendLog(
+        result.enabled
+          ? `system proxy: on → ${result.host ?? "127.0.0.1"}:${result.port ?? 1080} (${(result.services ?? []).join(", ") || "services"})`
+          : "system proxy: off (restored)",
+      );
+      if (result.warnings?.length) {
+        appendLog(`system proxy warnings: ${result.warnings.join("; ")}`);
+      }
+    } finally {
+      setSystemProxyBusy(false);
     }
   }
 
@@ -321,14 +363,25 @@ export function App() {
             <h1>Dashboard</h1>
             <p className="muted">SFM-like shell · desktop↔core bridge</p>
           </div>
-          <button
-            type="button"
-            className={"connect" + (connected ? " on" : "")}
-            disabled={busy === "core"}
-            onClick={() => void onToggleConnect()}
-          >
-            {connected ? "Disconnect" : "Connect"}
-          </button>
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className={"connect" + (connected ? " on" : "")}
+              disabled={busy === "core"}
+              onClick={() => void onToggleConnect()}
+            >
+              {connected ? "Disconnect" : "Connect"}
+            </button>
+            <button
+              type="button"
+              className={"connect" + (systemProxy ? " on" : "")}
+              disabled={systemProxyBusy || backend !== "tauri"}
+              title="Set macOS HTTP/HTTPS/SOCKS to 127.0.0.1:1080"
+              onClick={() => void onToggleSystemProxy()}
+            >
+              {systemProxy ? "System Proxy: On" : "System Proxy: Off"}
+            </button>
+          </div>
         </header>
 
         <div className={"banner " + health.level}>{health.text}</div>
@@ -352,6 +405,9 @@ export function App() {
               </li>
               <li>
                 Mixed: <strong>127.0.0.1:1080</strong>
+              </li>
+              <li>
+                System proxy: <strong>{systemProxy ? "on" : "off"}</strong>
               </li>
               <li>
                 clash_api: <strong>{apiBase.replace("https://", "").replace("http://", "")}</strong>

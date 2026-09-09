@@ -266,6 +266,100 @@ fn looks_like_tun_permission_error(message: &str) -> bool {
             || lower.contains("configure tun interface"))
 }
 
+
+/// Apply office/abroad mode tweaks and write a temp config for sing-box to run.
+/// manual → copy as-is (still materialize so TUN stripping can chain off it).
+fn write_mode_patched_config(src: &Path, mode: &str) -> Result<PathBuf, String> {
+    let raw = std::fs::read_to_string(src).map_err(|e| e.to_string())?;
+    let mut value: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let mode = mode.trim().to_ascii_lowercase();
+
+    if mode == "office" {
+        // Bias selector tag=final default → direct (UI promises this).
+        if let Some(outs) = value.get_mut("outbounds").and_then(|v| v.as_array_mut()) {
+            for ob in outs.iter_mut() {
+                if ob.get("type").and_then(|t| t.as_str()) == Some("selector")
+                    && ob.get("tag").and_then(|t| t.as_str()) == Some("final")
+                {
+                    let has_direct = ob
+                        .get("outbounds")
+                        .and_then(|o| o.as_array())
+                        .map(|arr| arr.iter().any(|x| x.as_str() == Some("direct")))
+                        .unwrap_or(false);
+                    if has_direct {
+                        ob.as_object_mut()
+                            .ok_or_else(|| "final outbound not an object".to_string())?
+                            .insert("default".into(), Value::String("direct".into()));
+                    }
+                }
+            }
+        }
+        // GitHub / ssh / git → direct before geosite-github→proxy
+        if let Some(rules) = value
+            .pointer_mut("/route/rules")
+            .and_then(|v| v.as_array_mut())
+        {
+            let mut insert_at = 0usize;
+            while insert_at < rules.len() {
+                let r = &rules[insert_at];
+                let action = r.get("action").and_then(|a| a.as_str()).unwrap_or("");
+                let proto = r.get("protocol");
+                let is_dns = action == "sniff"
+                    || action == "hijack-dns"
+                    || proto.and_then(|p| p.as_str()) == Some("dns")
+                    || proto
+                        .and_then(|p| p.as_array())
+                        .map(|a| a.iter().any(|x| x.as_str() == Some("dns")))
+                        .unwrap_or(false);
+                if is_dns {
+                    insert_at += 1;
+                    continue;
+                }
+                break;
+            }
+            let protect = vec![
+                serde_json::json!({
+                    "domain_suffix": ["github.com", "githubusercontent.com"],
+                    "outbound": "direct"
+                }),
+                serde_json::json!({
+                    "process_name": ["ssh", "git"],
+                    "outbound": "direct"
+                }),
+            ];
+            for (i, rule) in protect.into_iter().enumerate() {
+                rules.insert(insert_at + i, rule);
+            }
+        }
+        // coexistence with company tunnel
+        if let Some(inbounds) = value.get_mut("inbounds").and_then(|v| v.as_array_mut()) {
+            for ib in inbounds.iter_mut() {
+                if ib.get("type").and_then(|t| t.as_str()) == Some("tun") {
+                    if let Some(obj) = ib.as_object_mut() {
+                        obj.insert("strict_route".into(), Value::Bool(false));
+                    }
+                }
+            }
+        }
+    } else if mode == "abroad" {
+        if let Some(inbounds) = value.get_mut("inbounds").and_then(|v| v.as_array_mut()) {
+            for ib in inbounds.iter_mut() {
+                if ib.get("type").and_then(|t| t.as_str()) == Some("tun") {
+                    if let Some(obj) = ib.as_object_mut() {
+                        obj.insert("strict_route".into(), Value::Bool(true));
+                    }
+                }
+            }
+        }
+    }
+
+    let dir = runtime_dir()?;
+    let out = dir.join(format!("baseline-{mode}.json"));
+    let body = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    std::fs::write(&out, body + "\n").map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// Write a temp config with TUN inbounds removed (mixed/HTTP only) for unprivileged macOS.
 fn write_config_without_tun(src: &Path) -> Result<PathBuf, String> {
     let raw = std::fs::read_to_string(src).map_err(|e| e.to_string())?;
@@ -351,7 +445,7 @@ fn core_status() -> Value {
 }
 
 #[tauri::command]
-fn core_start(config_path: String) -> Value {
+fn core_start(config_path: String, mode: Option<String>) -> Value {
     let mut state = CORE.lock().expect("core lock");
     if let Some(mut child) = state.child.take() {
         let _ = child.kill();
@@ -374,6 +468,21 @@ fn core_start(config_path: String) -> Value {
         }
     };
     let resolved_str = resolved.to_string_lossy().into_owned();
+    let mode_name = mode.unwrap_or_else(|| "manual".into());
+    let patched = match write_mode_patched_config(&resolved, &mode_name) {
+        Ok(path) => path,
+        Err(err) => {
+            state.state = "crashed".into();
+            state.config_path = Some(resolved_str);
+            state.last_error = Some(format!("mode patch failed: {err}"));
+            return json!({
+                "ok": false,
+                "error": format!("mode patch failed: {err}"),
+                "status": state.status()
+            });
+        }
+    };
+    let resolved_str = patched.to_string_lossy().into_owned();
     state.config_path = Some(resolved_str.clone());
 
     let Some(binary) = detect_sing_box() else {
@@ -471,7 +580,15 @@ fn core_stop() -> Value {
     }
     state.state = "stopped".into();
     state.soft_fail = false;
-    json!({ "ok": true, "status": state.status() })
+    // Drop system proxy when core stops so the machine is not left pointing at a dead :1080.
+    drop(state);
+    let proxy_clear = system_proxy_set(false);
+    let mut state = CORE.lock().expect("core lock");
+    json!({
+        "ok": true,
+        "status": state.status(),
+        "systemProxy": proxy_clear
+    })
 }
 
 #[tauri::command]
@@ -626,6 +743,291 @@ mod tests {
     }
 }
 
+
+const MIXED_HOST: &str = "127.0.0.1";
+const MIXED_PORT: &str = "1080";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedProxyState {
+    service: String,
+    web_enabled: bool,
+    web_server: String,
+    web_port: String,
+    secure_enabled: bool,
+    secure_server: String,
+    secure_port: String,
+    socks_enabled: bool,
+    socks_server: String,
+    socks_port: String,
+}
+
+struct SystemProxyState {
+    enabled: bool,
+    saved: Vec<SavedProxyState>,
+}
+
+impl SystemProxyState {
+    fn new() -> Self {
+        Self {
+            enabled: false,
+            saved: Vec::new(),
+        }
+    }
+}
+
+static SYSTEM_PROXY: Lazy<Mutex<SystemProxyState>> =
+    Lazy::new(|| Mutex::new(SystemProxyState::new()));
+
+fn run_networksetup(args: &[&str]) -> Result<String, String> {
+    let out = Command::new("/usr/sbin/networksetup")
+        .args(args)
+        .output()
+        .map_err(|e| format!("networksetup: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if !out.status.success() {
+        let msg = if !stderr.is_empty() { stderr } else { stdout };
+        return Err(format!("networksetup {:?} failed: {msg}", args));
+    }
+    Ok(stdout)
+}
+
+fn list_network_services() -> Result<Vec<String>, String> {
+    let raw = run_networksetup(&["-listallnetworkservices"])?;
+    let mut services = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("An asterisk") {
+            continue;
+        }
+        // Disabled services are prefixed with "* "
+        let name = line.strip_prefix("* ").unwrap_or(line).to_string();
+        if name.is_empty() {
+            continue;
+        }
+        // Skip known VPN/tun clients that fight system proxy
+        let lower = name.to_ascii_lowercase();
+        if lower.contains("sfm") || lower.contains("quantumult") || lower.contains("clash") {
+            continue;
+        }
+        services.push(name);
+    }
+    Ok(services)
+}
+
+fn parse_proxy_block(raw: &str) -> (bool, String, String) {
+    let mut enabled = false;
+    let mut server = String::new();
+    let mut port = String::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("Enabled:") {
+            enabled = rest.trim().eq_ignore_ascii_case("yes");
+        } else if let Some(rest) = line.strip_prefix("Server:") {
+            server = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("Port:") {
+            port = rest.trim().to_string();
+        }
+    }
+    (enabled, server, port)
+}
+
+fn snapshot_service(service: &str) -> Result<SavedProxyState, String> {
+    let web = run_networksetup(&["-getwebproxy", service])?;
+    let secure = run_networksetup(&["-getsecurewebproxy", service])?;
+    let socks = run_networksetup(&["-getsocksfirewallproxy", service])?;
+    let (web_enabled, web_server, web_port) = parse_proxy_block(&web);
+    let (secure_enabled, secure_server, secure_port) = parse_proxy_block(&secure);
+    let (socks_enabled, socks_server, socks_port) = parse_proxy_block(&socks);
+    Ok(SavedProxyState {
+        service: service.to_string(),
+        web_enabled,
+        web_server,
+        web_port,
+        secure_enabled,
+        secure_server,
+        secure_port,
+        socks_enabled,
+        socks_server,
+        socks_port,
+    })
+}
+
+fn apply_sing_proxy(service: &str) -> Result<(), String> {
+    run_networksetup(&["-setwebproxy", service, MIXED_HOST, MIXED_PORT])?;
+    run_networksetup(&["-setsecurewebproxy", service, MIXED_HOST, MIXED_PORT])?;
+    run_networksetup(&["-setsocksfirewallproxy", service, MIXED_HOST, MIXED_PORT])?;
+    run_networksetup(&["-setwebproxystate", service, "on"])?;
+    run_networksetup(&["-setsecurewebproxystate", service, "on"])?;
+    run_networksetup(&["-setsocksfirewallproxystate", service, "on"])?;
+    let _ = run_networksetup(&[
+        "-setproxybypassdomains",
+        service,
+        "127.0.0.1",
+        "localhost",
+        "*.local",
+        "169.254.0.0/16",
+    ]);
+    Ok(())
+}
+
+fn restore_service(saved: &SavedProxyState) -> Result<(), String> {
+    let svc = saved.service.as_str();
+    if saved.web_enabled && !saved.web_server.is_empty() {
+        run_networksetup(&[
+            "-setwebproxy",
+            svc,
+            &saved.web_server,
+            if saved.web_port.is_empty() { "0" } else { &saved.web_port },
+        ])?;
+        run_networksetup(&["-setwebproxystate", svc, "on"])?;
+    } else {
+        let _ = run_networksetup(&["-setwebproxystate", svc, "off"]);
+    }
+    if saved.secure_enabled && !saved.secure_server.is_empty() {
+        run_networksetup(&[
+            "-setsecurewebproxy",
+            svc,
+            &saved.secure_server,
+            if saved.secure_port.is_empty() {
+                "0"
+            } else {
+                &saved.secure_port
+            },
+        ])?;
+        run_networksetup(&["-setsecurewebproxystate", svc, "on"])?;
+    } else {
+        let _ = run_networksetup(&["-setsecurewebproxystate", svc, "off"]);
+    }
+    if saved.socks_enabled && !saved.socks_server.is_empty() {
+        run_networksetup(&[
+            "-setsocksfirewallproxy",
+            svc,
+            &saved.socks_server,
+            if saved.socks_port.is_empty() {
+                "0"
+            } else {
+                &saved.socks_port
+            },
+        ])?;
+        run_networksetup(&["-setsocksfirewallproxystate", svc, "on"])?;
+    } else {
+        let _ = run_networksetup(&["-setsocksfirewallproxystate", svc, "off"]);
+    }
+    Ok(())
+}
+
+fn disable_sing_proxy_on_service(service: &str) -> Result<(), String> {
+    let _ = run_networksetup(&["-setwebproxystate", service, "off"]);
+    let _ = run_networksetup(&["-setsecurewebproxystate", service, "off"]);
+    let _ = run_networksetup(&["-setsocksfirewallproxystate", service, "off"]);
+    Ok(())
+}
+
+#[tauri::command]
+fn system_proxy_status() -> Value {
+    let state = SYSTEM_PROXY.lock().expect("system proxy lock");
+    json!({
+        "ok": true,
+        "enabled": state.enabled,
+        "host": MIXED_HOST,
+        "port": MIXED_PORT.parse::<u16>().unwrap_or(1080),
+        "services": state.saved.iter().map(|s| &s.service).collect::<Vec<_>>(),
+    })
+}
+
+#[tauri::command]
+fn system_proxy_set(enabled: bool) -> Value {
+    #[cfg(not(target_os = "macos"))]
+    {
+        return json!({
+            "ok": false,
+            "error": "system proxy toggle is macOS-only for now",
+            "enabled": false
+        });
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut state = SYSTEM_PROXY.lock().expect("system proxy lock");
+        if enabled {
+            if state.enabled {
+                return json!({
+                    "ok": true,
+                    "enabled": true,
+                    "host": MIXED_HOST,
+                    "port": 1080,
+                    "services": state.saved.iter().map(|s| &s.service).collect::<Vec<_>>(),
+                });
+            }
+            let services = match list_network_services() {
+                Ok(s) if !s.is_empty() => s,
+                Ok(_) => {
+                    return json!({ "ok": false, "error": "no network services found", "enabled": false });
+                }
+                Err(err) => return json!({ "ok": false, "error": err, "enabled": false }),
+            };
+            // Prefer Wi-Fi / Ethernet; still snapshot all usable services
+            let mut saved = Vec::new();
+            let mut applied = Vec::new();
+            let mut errors = Vec::new();
+            for svc in &services {
+                match snapshot_service(svc) {
+                    Ok(snap) => {
+                        match apply_sing_proxy(svc) {
+                            Ok(()) => {
+                                applied.push(svc.clone());
+                                saved.push(snap);
+                            }
+                            Err(err) => errors.push(format!("{svc}: {err}")),
+                        }
+                    }
+                    Err(err) => errors.push(format!("{svc}: {err}")),
+                }
+            }
+            if applied.is_empty() {
+                return json!({
+                    "ok": false,
+                    "error": format!("failed to set system proxy: {}", errors.join("; ")),
+                    "enabled": false
+                });
+            }
+            state.enabled = true;
+            state.saved = saved;
+            json!({
+                "ok": true,
+                "enabled": true,
+                "host": MIXED_HOST,
+                "port": 1080,
+                "services": applied,
+                "warnings": errors,
+            })
+        } else {
+            if !state.enabled {
+                return json!({ "ok": true, "enabled": false, "host": MIXED_HOST, "port": 1080 });
+            }
+            let mut errors = Vec::new();
+            for snap in &state.saved {
+                if let Err(err) = restore_service(snap) {
+                    // fall back to forcing off
+                    let _ = disable_sing_proxy_on_service(&snap.service);
+                    errors.push(format!("{}: {err}", snap.service));
+                }
+            }
+            state.enabled = false;
+            state.saved.clear();
+            json!({
+                "ok": true,
+                "enabled": false,
+                "host": MIXED_HOST,
+                "port": 1080,
+                "warnings": errors,
+            })
+        }
+    }
+}
+
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -637,7 +1039,9 @@ pub fn run() {
             clash_get_connections,
             clash_delay,
             validate_config,
-            health_classify
+            health_classify,
+            system_proxy_status,
+            system_proxy_set
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

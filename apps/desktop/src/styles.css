@@ -265,3 +265,10 @@ body { background: var(--bg); color: var(--text); }
 
 .pill.ok { color: var(--ok); border-color: #1f5a40; }
 .pill.bad { color: var(--danger); border-color: #6a3034; }
+
+.topbar-actions {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}

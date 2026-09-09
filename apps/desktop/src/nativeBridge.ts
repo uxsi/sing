@@ -111,16 +111,17 @@ export async function coreStatus(): Promise<{ ok: boolean; status: CoreStatus; e
 
 export async function coreStart(
   configPath: string,
-): Promise<{ ok: boolean; softFail?: boolean; error?: string; status?: CoreStatus }> {
+  mode: string = "manual",
+): Promise<{ ok: boolean; softFail?: boolean; error?: string; status?: CoreStatus; warning?: string }> {
   const kind = await detectBackend();
   if (kind === "tauri") {
-    return tauriInvoke("core_start", { configPath });
+    return tauriInvoke("core_start", { configPath, mode });
   }
   if (kind === "bridge") {
     return bridgeFetch("/core/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ configPath }),
+      body: JSON.stringify({ configPath, mode }),
     });
   }
   return {
@@ -217,4 +218,34 @@ export async function bridgeValidate(
     });
   }
   return { ok: false, errors: [{ path: "$", message: "use local validateConfigText" }] };
+}
+
+export async function systemProxyStatus(): Promise<{
+  ok: boolean;
+  enabled?: boolean;
+  host?: string;
+  port?: number;
+  error?: string;
+}> {
+  const kind = await detectBackend();
+  if (kind === "tauri") {
+    return tauriInvoke("system_proxy_status");
+  }
+  return { ok: false, error: "System proxy requires Tauri on macOS", enabled: false };
+}
+
+export async function systemProxySet(enabled: boolean): Promise<{
+  ok: boolean;
+  enabled?: boolean;
+  host?: string;
+  port?: number;
+  services?: string[];
+  warnings?: string[];
+  error?: string;
+}> {
+  const kind = await detectBackend();
+  if (kind === "tauri") {
+    return tauriInvoke("system_proxy_set", { enabled });
+  }
+  return { ok: false, error: "System proxy requires Tauri on macOS", enabled: false };
 }
