@@ -161,6 +161,7 @@ export function App() {
       }
       if (!result.ok) {
         appendLog(`core start: ${result.error ?? "failed"}`);
+        if (result.status?.lastError) appendLog(result.status.lastError);
         setConnected(false);
         return;
       }
@@ -186,6 +187,7 @@ export function App() {
           ? `core status: ${st.status.state}`
           : `core status: ${st.error ?? "unavailable"}`,
       );
+      if (st.status?.lastError) appendLog(st.status.lastError);
     } finally {
       setBusy(null);
     }

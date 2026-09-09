@@ -1,6 +1,7 @@
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -283,14 +284,66 @@ fn core_start(config_path: String) -> Value {
     match Command::new(&binary)
         .args(["run", "-c", &resolved_str])
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
     {
-        Ok(child) => {
-            state.child = Some(child);
-            state.state = "running".into();
-            json!({ "ok": true, "status": state.status() })
+        Ok(mut child) => {
+            // Connect used to return success on spawn only; FATAL exits within ~1s
+            // (bad config / rule-set / TUN). Probe once so Status is not a surprise.
+            std::thread::sleep(Duration::from_millis(700));
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let mut err_tail = String::new();
+                    if let Some(mut stderr) = child.stderr.take() {
+                        let mut buf = String::new();
+                        let _ = stderr.read_to_string(&mut buf);
+                        // keep last ~1.5KB of log
+                        let trimmed = buf.trim();
+                        if !trimmed.is_empty() {
+                            let bytes = trimmed.as_bytes();
+                            let start = bytes.len().saturating_sub(1500);
+                            err_tail = String::from_utf8_lossy(&bytes[start..]).into_owned();
+                        }
+                    }
+                    let mut message = format!("core exited during start: {status}");
+                    if !err_tail.is_empty() {
+                        message = format!("{message}\n{err_tail}");
+                    }
+                    state.child = None;
+                    state.state = "crashed".into();
+                    state.last_error = Some(message.clone());
+                    json!({
+                        "ok": false,
+                        "error": message,
+                        "status": state.status()
+                    })
+                }
+                Ok(None) => {
+                    // Drain stderr in background so the pipe cannot fill and stall core.
+                    if let Some(mut stderr) = child.stderr.take() {
+                        std::thread::spawn(move || {
+                            let mut sink = Vec::new();
+                            let _ = stderr.read_to_end(&mut sink);
+                        });
+                    }
+                    state.child = Some(child);
+                    state.state = "running".into();
+                    json!({ "ok": true, "status": state.status() })
+                }
+                Err(err) => {
+                    let _ = child.kill();
+                    let message = err.to_string();
+                    state.child = None;
+                    state.state = "crashed".into();
+                    state.last_error = Some(message.clone());
+                    json!({
+                        "ok": false,
+                        "error": message,
+                        "status": state.status()
+                    })
+                }
+            }
         }
         Err(err) => {
             state.state = "crashed".into();
