@@ -235,6 +235,103 @@ fn clash_get(path: &str, base: Option<String>) -> Result<Value, String> {
     }
 }
 
+
+fn stderr_tail(child: &mut Child) -> String {
+    let mut err_tail = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let mut buf = String::new();
+        let _ = stderr.read_to_string(&mut buf);
+        let trimmed = buf.trim();
+        if !trimmed.is_empty() {
+            let bytes = trimmed.as_bytes();
+            let start = bytes.len().saturating_sub(1500);
+            err_tail = String::from_utf8_lossy(&bytes[start..]).into_owned();
+        }
+    }
+    err_tail
+}
+
+fn looks_like_tun_permission_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("tun")
+        && (lower.contains("operation not permitted")
+            || lower.contains("permission denied")
+            || lower.contains("configure tun interface"))
+}
+
+/// Write a temp config with TUN inbounds removed (mixed/HTTP only) for unprivileged macOS.
+fn write_config_without_tun(src: &Path) -> Result<PathBuf, String> {
+    let raw = std::fs::read_to_string(src).map_err(|e| e.to_string())?;
+    let mut value: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    if let Some(inbounds) = value.get_mut("inbounds").and_then(|v| v.as_array_mut()) {
+        inbounds.retain(|ib| ib.get("type").and_then(|t| t.as_str()) != Some("tun"));
+    }
+    if let Some(rules) = value
+        .pointer_mut("/route/rules")
+        .and_then(|v| v.as_array_mut())
+    {
+        rules.retain(|rule| {
+            match rule.get("inbound") {
+                Some(Value::String(s)) => !s.contains("tun"),
+                Some(Value::Array(arr)) => !arr.iter().any(|x| {
+                    x.as_str().map(|s| s.contains("tun")).unwrap_or(false)
+                }),
+                _ => true,
+            }
+        });
+    }
+    let dir = std::env::temp_dir().join("sing-desktop");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let out = dir.join("baseline-no-tun.json");
+    let body = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    std::fs::write(&out, body + "\n").map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+enum SpawnOutcome {
+    Running(Child),
+    Exited { status: String, stderr: String },
+    SpawnErr(String),
+}
+
+fn spawn_and_probe(binary: &str, config: &str) -> SpawnOutcome {
+    match Command::new(binary)
+        .args(["run", "-c", config])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(mut child) => {
+            std::thread::sleep(Duration::from_millis(700));
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let stderr = stderr_tail(&mut child);
+                    SpawnOutcome::Exited {
+                        status: status.to_string(),
+                        stderr,
+                    }
+                }
+                Ok(None) => {
+                    if let Some(mut stderr) = child.stderr.take() {
+                        std::thread::spawn(move || {
+                            let mut sink = Vec::new();
+                            let _ = stderr.read_to_end(&mut sink);
+                        });
+                    }
+                    SpawnOutcome::Running(child)
+                }
+                Err(err) => {
+                    let _ = child.kill();
+                    SpawnOutcome::SpawnErr(err.to_string())
+                }
+            }
+        }
+        Err(err) => SpawnOutcome::SpawnErr(err.to_string()),
+    }
+}
+
+
 #[tauri::command]
 fn core_status() -> Value {
     let mut state = CORE.lock().expect("core lock");
@@ -281,76 +378,72 @@ fn core_start(config_path: String) -> Value {
     };
     state.binary = Some(binary.clone());
 
-    match Command::new(&binary)
-        .args(["run", "-c", &resolved_str])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(mut child) => {
-            // Connect used to return success on spawn only; FATAL exits within ~1s
-            // (bad config / rule-set / TUN). Probe once so Status is not a surprise.
-            std::thread::sleep(Duration::from_millis(700));
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    let mut err_tail = String::new();
-                    if let Some(mut stderr) = child.stderr.take() {
-                        let mut buf = String::new();
-                        let _ = stderr.read_to_string(&mut buf);
-                        // keep last ~1.5KB of log
-                        let trimmed = buf.trim();
-                        if !trimmed.is_empty() {
-                            let bytes = trimmed.as_bytes();
-                            let start = bytes.len().saturating_sub(1500);
-                            err_tail = String::from_utf8_lossy(&bytes[start..]).into_owned();
+    let first = spawn_and_probe(&binary, &resolved_str);
+    match first {
+        SpawnOutcome::Running(child) => {
+            state.child = Some(child);
+            state.state = "running".into();
+            return json!({ "ok": true, "status": state.status() });
+        }
+        SpawnOutcome::SpawnErr(message) => {
+            state.state = "crashed".into();
+            state.last_error = Some(message.clone());
+            return json!({
+                "ok": false,
+                "error": message,
+                "status": state.status()
+            });
+        }
+        SpawnOutcome::Exited { status, stderr } => {
+            let mut message = format!("core exited during start: {status}");
+            if !stderr.is_empty() {
+                message = format!("{message}\n{stderr}");
+            }
+            // Unprivileged macOS cannot configure utun — fall back to mixed-only once.
+            if looks_like_tun_permission_error(&message) {
+                match write_config_without_tun(Path::new(&resolved_str)) {
+                    Ok(fallback) => {
+                        let fb = fallback.to_string_lossy().into_owned();
+                        state.config_path = Some(fb.clone());
+                        match spawn_and_probe(&binary, &fb) {
+                            SpawnOutcome::Running(child) => {
+                                state.child = Some(child);
+                                state.state = "running".into();
+                                state.last_error = Some(
+                                    "TUN not permitted; started mixed-only fallback (no utun)".into(),
+                                );
+                                return json!({
+                                    "ok": true,
+                                    "fallback": "mixed-only",
+                                    "warning": "TUN not permitted; started mixed-only fallback",
+                                    "status": state.status()
+                                });
+                            }
+                            SpawnOutcome::Exited { status, stderr } => {
+                                let mut message2 = format!(
+                                    "core exited during start (after mixed-only fallback): {status}"
+                                );
+                                if !stderr.is_empty() {
+                                    message2 = format!("{message2}\n{stderr}");
+                                }
+                                message = format!("{message}\n---\n{message2}");
+                            }
+                            SpawnOutcome::SpawnErr(err) => {
+                                message = format!("{message}\n---\nmixed-only fallback spawn: {err}");
+                            }
                         }
                     }
-                    let mut message = format!("core exited during start: {status}");
-                    if !err_tail.is_empty() {
-                        message = format!("{message}\n{err_tail}");
+                    Err(err) => {
+                        message = format!("{message}\n---\nmixed-only fallback config: {err}");
                     }
-                    state.child = None;
-                    state.state = "crashed".into();
-                    state.last_error = Some(message.clone());
-                    json!({
-                        "ok": false,
-                        "error": message,
-                        "status": state.status()
-                    })
-                }
-                Ok(None) => {
-                    // Drain stderr in background so the pipe cannot fill and stall core.
-                    if let Some(mut stderr) = child.stderr.take() {
-                        std::thread::spawn(move || {
-                            let mut sink = Vec::new();
-                            let _ = stderr.read_to_end(&mut sink);
-                        });
-                    }
-                    state.child = Some(child);
-                    state.state = "running".into();
-                    json!({ "ok": true, "status": state.status() })
-                }
-                Err(err) => {
-                    let _ = child.kill();
-                    let message = err.to_string();
-                    state.child = None;
-                    state.state = "crashed".into();
-                    state.last_error = Some(message.clone());
-                    json!({
-                        "ok": false,
-                        "error": message,
-                        "status": state.status()
-                    })
                 }
             }
-        }
-        Err(err) => {
+            state.child = None;
             state.state = "crashed".into();
-            state.last_error = Some(err.to_string());
+            state.last_error = Some(message.clone());
             json!({
                 "ok": false,
-                "error": err.to_string(),
+                "error": message,
                 "status": state.status()
             })
         }
