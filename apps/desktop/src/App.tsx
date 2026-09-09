@@ -150,6 +150,32 @@ export function App() {
     })();
   }, [appendLog]);
 
+  // If core dies while System Proxy is on, browsers black-hole — clear OS proxy.
+  useEffect(() => {
+    if (backend !== "tauri") return;
+    const id = window.setInterval(() => {
+      void (async () => {
+        const st = await coreStatus();
+        if (st.status) setCoreInfo(st.status);
+        const running = st.status?.state === "running";
+        if (!running && connected) {
+          setConnected(false);
+          appendLog("core no longer running");
+        }
+        if (!running && systemProxy) {
+          const cleared = await systemProxySet(false);
+          setSystemProxy(false);
+          appendLog(
+            cleared.ok
+              ? "system proxy: off (core died — auto cleared)"
+              : `system proxy auto-clear failed: ${cleared.error ?? "unknown"}`,
+          );
+        }
+      })();
+    }, 2500);
+    return () => window.clearInterval(id);
+  }, [backend, connected, systemProxy, appendLog]);
+
   async function onToggleConnect() {
     setBusy("core");
     try {

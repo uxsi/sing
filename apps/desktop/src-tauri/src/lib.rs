@@ -269,6 +269,27 @@ fn looks_like_tun_permission_error(message: &str) -> bool {
 
 /// Apply office/abroad mode tweaks and write a temp config for sing-box to run.
 /// manual → copy as-is (still materialize so TUN stripping can chain off it).
+
+fn force_office_selector_direct() {
+    // Best-effort: clash API may need a moment after listen.
+    for _ in 0..10 {
+        std::thread::sleep(Duration::from_millis(150));
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let url = format!("{DEFAULT_CLASH_API}/proxies/final");
+        let body = serde_json::json!({ "name": "direct" });
+        match client.put(&url).json(&body).send() {
+            Ok(resp) if resp.status().is_success() => return,
+            _ => continue,
+        }
+    }
+}
+
 fn write_mode_patched_config(src: &Path, mode: &str) -> Result<PathBuf, String> {
     let raw = std::fs::read_to_string(src).map_err(|e| e.to_string())?;
     let mut value: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
@@ -355,6 +376,13 @@ fn write_mode_patched_config(src: &Path, mode: &str) -> Result<PathBuf, String> 
                     dns.insert("final".into(), Value::String("dns-local".into()));
                 }
             }
+        }
+        // cache.db remembers clash selector "now=proxy" and overrides config default.
+        if let Some(exp) = value.get_mut("experimental").and_then(|e| e.as_object_mut()) {
+            exp.insert(
+                "cache_file".into(),
+                serde_json::json!({ "enabled": false }),
+            );
         }
     } else if mode == "abroad" {
         if let Some(inbounds) = value.get_mut("inbounds").and_then(|v| v.as_array_mut()) {
@@ -519,7 +547,12 @@ fn core_start(config_path: String, mode: Option<String>) -> Value {
         SpawnOutcome::Running(child) => {
             state.child = Some(child);
             state.state = "running".into();
-            return json!({ "ok": true, "status": state.status() });
+            let status = state.status();
+            drop(state);
+            if mode_name.eq_ignore_ascii_case("office") {
+                force_office_selector_direct();
+            }
+            return json!({ "ok": true, "status": status });
         }
         SpawnOutcome::SpawnErr(message) => {
             state.state = "crashed".into();
@@ -548,11 +581,16 @@ fn core_start(config_path: String, mode: Option<String>) -> Value {
                                 state.last_error = Some(
                                     "TUN not permitted; started mixed-only fallback (no utun)".into(),
                                 );
+                                let status = state.status();
+                                drop(state);
+                                if mode_name.eq_ignore_ascii_case("office") {
+                                    force_office_selector_direct();
+                                }
                                 return json!({
                                     "ok": true,
                                     "fallback": "mixed-only",
                                     "warning": "TUN not permitted; started mixed-only fallback",
-                                    "status": state.status()
+                                    "status": status
                                 });
                             }
                             SpawnOutcome::Exited { status, stderr } => {
@@ -762,6 +800,14 @@ mod tests {
 const MIXED_HOST: &str = "127.0.0.1";
 const MIXED_PORT: &str = "1080";
 
+fn is_our_mixed_endpoint(server: &str, port: &str) -> bool {
+    let server = server.trim();
+    let port = port.trim();
+    (server == MIXED_HOST || server.eq_ignore_ascii_case("localhost"))
+        && (port == MIXED_PORT || port == "1080")
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SavedProxyState {
@@ -852,9 +898,19 @@ fn snapshot_service(service: &str) -> Result<SavedProxyState, String> {
     let web = run_networksetup(&["-getwebproxy", service])?;
     let secure = run_networksetup(&["-getsecurewebproxy", service])?;
     let socks = run_networksetup(&["-getsocksfirewallproxy", service])?;
-    let (web_enabled, web_server, web_port) = parse_proxy_block(&web);
-    let (secure_enabled, secure_server, secure_port) = parse_proxy_block(&secure);
-    let (socks_enabled, socks_server, socks_port) = parse_proxy_block(&socks);
+    let (mut web_enabled, web_server, web_port) = parse_proxy_block(&web);
+    let (mut secure_enabled, secure_server, secure_port) = parse_proxy_block(&secure);
+    let (mut socks_enabled, socks_server, socks_port) = parse_proxy_block(&socks);
+    // Treat leftover sing mixed endpoints as "was off" so Off does not restore them.
+    if is_our_mixed_endpoint(&web_server, &web_port) {
+        web_enabled = false;
+    }
+    if is_our_mixed_endpoint(&secure_server, &secure_port) {
+        secure_enabled = false;
+    }
+    if is_our_mixed_endpoint(&socks_server, &socks_port) {
+        socks_enabled = false;
+    }
     Ok(SavedProxyState {
         service: service.to_string(),
         web_enabled,
@@ -870,12 +926,14 @@ fn snapshot_service(service: &str) -> Result<SavedProxyState, String> {
 }
 
 fn apply_sing_proxy(service: &str) -> Result<(), String> {
+    // HTTP/HTTPS only — enabling SOCKS too makes some stacks (Safari + corporate agents)
+    // fail closed when :1080 flaps. Mixed inbound still accepts both if needed later.
     run_networksetup(&["-setwebproxy", service, MIXED_HOST, MIXED_PORT])?;
     run_networksetup(&["-setsecurewebproxy", service, MIXED_HOST, MIXED_PORT])?;
-    run_networksetup(&["-setsocksfirewallproxy", service, MIXED_HOST, MIXED_PORT])?;
     run_networksetup(&["-setwebproxystate", service, "on"])?;
     run_networksetup(&["-setsecurewebproxystate", service, "on"])?;
-    run_networksetup(&["-setsocksfirewallproxystate", service, "on"])?;
+    // Ensure SOCKS is not left pointing at us from a prior toggle.
+    let _ = run_networksetup(&["-setsocksfirewallproxystate", service, "off"]);
     let _ = run_networksetup(&[
         "-setproxybypassdomains",
         service,
@@ -883,13 +941,36 @@ fn apply_sing_proxy(service: &str) -> Result<(), String> {
         "localhost",
         "*.local",
         "169.254.0.0/16",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "*.ioa.tencent.com",
+        "ioa.tencent.com",
     ]);
     Ok(())
 }
 
+fn mixed_port_listening() -> bool {
+    use std::net::TcpStream;
+    use std::time::Duration;
+    TcpStream::connect_timeout(
+        &format!("{MIXED_HOST}:{MIXED_PORT}")
+            .parse()
+            .unwrap_or_else(|_| format!("127.0.0.1:{MIXED_PORT}").parse().unwrap()),
+        Duration::from_millis(400),
+    )
+    .is_ok()
+}
+
 fn restore_service(saved: &SavedProxyState) -> Result<(), String> {
     let svc = saved.service.as_str();
-    if saved.web_enabled && !saved.web_server.is_empty() {
+    // Never "restore" back onto our own mixed endpoint — that leaves System Proxy
+    // looking still on after Off when a previous run left 127.0.0.1:1080 in place.
+    let web_ours = is_our_mixed_endpoint(&saved.web_server, &saved.web_port);
+    let secure_ours = is_our_mixed_endpoint(&saved.secure_server, &saved.secure_port);
+    let socks_ours = is_our_mixed_endpoint(&saved.socks_server, &saved.socks_port);
+
+    if saved.web_enabled && !saved.web_server.is_empty() && !web_ours {
         run_networksetup(&[
             "-setwebproxy",
             svc,
@@ -900,7 +981,7 @@ fn restore_service(saved: &SavedProxyState) -> Result<(), String> {
     } else {
         let _ = run_networksetup(&["-setwebproxystate", svc, "off"]);
     }
-    if saved.secure_enabled && !saved.secure_server.is_empty() {
+    if saved.secure_enabled && !saved.secure_server.is_empty() && !secure_ours {
         run_networksetup(&[
             "-setsecurewebproxy",
             svc,
@@ -915,7 +996,7 @@ fn restore_service(saved: &SavedProxyState) -> Result<(), String> {
     } else {
         let _ = run_networksetup(&["-setsecurewebproxystate", svc, "off"]);
     }
-    if saved.socks_enabled && !saved.socks_server.is_empty() {
+    if saved.socks_enabled && !saved.socks_server.is_empty() && !socks_ours {
         run_networksetup(&[
             "-setsocksfirewallproxy",
             svc,
@@ -975,6 +1056,15 @@ fn system_proxy_set(enabled: bool) -> Value {
                     "services": state.saved.iter().map(|s| &s.service).collect::<Vec<_>>(),
                 });
             }
+            if !mixed_port_listening() {
+                return json!({
+                    "ok": false,
+                    "error": format!(
+                        "mixed inbound {MIXED_HOST}:{MIXED_PORT} is not listening — Connect core first"
+                    ),
+                    "enabled": false
+                });
+            }
             let services = match list_network_services() {
                 Ok(s) if !s.is_empty() => s,
                 Ok(_) => {
@@ -1030,9 +1120,7 @@ fn system_proxy_set(enabled: bool) -> Value {
                 }
             } else if let Ok(services) = list_network_services() {
                 for svc in services {
-                    if let Err(err) = disable_sing_proxy_on_service(&svc) {
-                        errors.push(format!("{svc}: {err}"));
-                    }
+                    let _ = disable_sing_proxy_on_service(&svc);
                 }
             }
             state.enabled = false;
@@ -1052,6 +1140,30 @@ fn system_proxy_set(enabled: bool) -> Value {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|_app| {
+            // Dev/QA helper: SING_BOOTSTRAP=1 auto Connect(office) + System Proxy On.
+            if let Ok(boot) = std::env::var("SING_BOOTSTRAP") {
+                if boot == "1" || boot == "cycle" {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(1800));
+                        let started = core_start(
+                            "configs/examples/baseline.json".into(),
+                            Some("office".into()),
+                        );
+                        eprintln!("[SING_BOOTSTRAP] core_start => {started}");
+                        std::thread::sleep(Duration::from_millis(900));
+                        let proxy = system_proxy_set(true);
+                        eprintln!("[SING_BOOTSTRAP] system_proxy_set(on) => {proxy}");
+                        if boot == "cycle" {
+                            std::thread::sleep(Duration::from_millis(2500));
+                            let off = system_proxy_set(false);
+                            eprintln!("[SING_BOOTSTRAP] system_proxy_set(off) => {off}");
+                        }
+                    });
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             core_status,
             core_start,

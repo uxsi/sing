@@ -1,2 +1,5 @@
 
 cache.db
+
+# tauri codegen
+gen/
